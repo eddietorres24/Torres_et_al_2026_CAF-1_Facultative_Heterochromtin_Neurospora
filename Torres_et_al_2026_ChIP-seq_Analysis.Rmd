@@ -48,14 +48,14 @@ matLocus <- GRanges("CM002236.1", IRanges(1856288, 1862459)) # mat
 param <- readParam(discard = matLocus, pe="none", max.frag=1500, minq=20 )
 
 #reading in regions of interest
-regions <- list(allgenes_promTSSext = read.table("bed_csv_txt_files/bed_files/allgenespromTSSext.bed"), allgenespromTSS = read.table("bed_csv_txt_files/bed_files/allgenes_promTSS.bed")) 
+regions <- list(allgenes_promTSSext = read.table("bed_csv_txt_files/allgenespromTSSext.bed"), allgenespromTSS = read.table("bed_csv_txt_files/allgenes_promTSS.bed")) 
 
 #original list
-# list(K27genes_proms = read.table("bed_csv_txt_files/bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("bed_csv_txt_files/bed_files/K27_genes_stringent.bed"), K27proms = read.table("bed_csv_txt_files/bed_files/K27_promoters.bed"), K27promTSS = read.table("bed_csv_txt_files/bed_files/K27_prom_TSS.bed"), allgenes = read.table("bed_csv_txt_files/bed_files/all_genes_forR.bed"), K27promTSSext = read.table("bed_csv_txt_files/bed_files/K27promTSSext.bed"), allgenespromTSS = read.table("bed_csv_txt_files/bed_files/allgenes_promTSS.bed"), allgenes_promTSSext = read.table("bed_csv_txt_files/bed_files/allgenespromTSSext.bed")) 
+# list(K27genes_proms = read.table("bed_csv_txt_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("bed_csv_txt_files/K27_genes_stringent.bed"), K27proms = read.table("bed_csv_txt_files/K27_promoters.bed"), K27promTSS = read.table("bed_csv_txt_files/K27_prom_TSS.bed"), allgenes = read.table("bed_csv_txt_files/all_genes_forR.bed"), K27promTSSext = read.table("bed_csv_txt_files/K27promTSSext.bed"), allgenespromTSS = read.table("bed_csv_txt_files/allgenes_promTSS.bed"), allgenes_promTSSext = read.table("bed_csv_txt_files/allgenespromTSSext.bed")) 
 
-#K27genes_proms = read.table("bed_csv_txt_files/bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("bed_csv_txt_files/bed_files/K27_genes_stringent.bed"), K27proms = read.table("bed_csv_txt_files/bed_files/K27_promoters.bed"), K27promTSS = read.table("bed_csv_txt_files/bed_files/K27_prom_TSS.bed"), allgenes = read.table("bed_csv_txt_files/bed_files/all_genes_forR.bed"), K27promTSSext = read.table("bed_csv_txt_files/bed_files/K27promTSSext.bed"), 
+#K27genes_proms = read.table("bed_csv_txt_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("bed_csv_txt_files/K27_genes_stringent.bed"), K27proms = read.table("bed_csv_txt_files/K27_promoters.bed"), K27promTSS = read.table("bed_csv_txt_files/K27_prom_TSS.bed"), allgenes = read.table("bed_csv_txt_files/all_genes_forR.bed"), K27promTSSext = read.table("bed_csv_txt_files/K27promTSSext.bed"), 
 
-new = read.table("bed_csv_txt_files/bed_files/H3K27me3_methylated_genes_FINAL.bed")
+new = read.table("bed_csv_txt_files/H3K27me3_methylated_genes_FINAL.bed")
 
 regions$K27promTSS = subset(regions$K27promTSS, regions$K27promTSS$V10 %in% new$V10)
 regions$K27proms = subset(regions$K27proms, regions$K27proms$V10 %in% new$V10)
@@ -2274,7 +2274,7 @@ write.table(K36_not_lost_bed, file = "CAF-1_H3K36me3_not_lost_K27_genes.bed", se
 
 
 ##############################
-#H3K36me3_Results_allgenes_vInput = read.table("./CAF-1_Full_genome_Analysis/H3K36me3_Results_K27promTSS_vInput.csv", sep = ",", header = TRUE)
+#H3K36me3_Results_allgenes_vInput = read.table("bed_csv_txt_files/CAF-1_Full_genome_Analysis/H3K36me3_Results_K27promTSS_vInput.csv", sep = ",", header = TRUE)
 
 ###Figure 3
 
