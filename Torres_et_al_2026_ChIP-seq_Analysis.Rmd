@@ -9,12 +9,6 @@ output: html_document
 
 knitr::opts_chunk$set(echo = TRUE)
 
-# Set working environment
-
-workingdir="C:/Users/eddie/Lewis_Lab_Research/GitHub"
-
-#set working directory to the correct location for working machine
-knitr::opts_knit$set(root.dir = "workingdir")
 
 library(dplyr)
   require(csaw)
@@ -29,16 +23,14 @@ library(dplyr)
 
 ```{r, read in metadata & regions of interest}
 #reading in metdata
-meta <- read.csv("../csaw_samples_files/cac_csaw_FINAL.csv")
-#metaQC <- read.csv("../csaw_samples_files/cac_csaw_QC_TEST.csv")
+meta <- read.csv("bed_csv_txt_files/csaw_samples_files/cac_csaw_FINAL.csv")
+#metaQC <- read.csv("bed_csv_txt_files/csaw_samples_files/cac_csaw_QC_TEST.csv")
 
-#fix path (if necessary, should only be if you're in wrong directory)
-meta <- meta %>%
-  mutate(bamReads = paste0("../", bamReads))
-
+#fix path (if necessary, should only need to do if you're in wrong directory)
+#meta <- meta %>%
+#mutate(bamReads = paste0("../", bamReads))
 #metaQC <- metaQC %>%
-  #mutate(bamReads = paste0("../", bamReads))
-
+#mutate(bamReads = paste0("../", bamReads))
 #meta <- meta %>%
 #mutate(Peaks = paste0("../", Peaks))
 
@@ -56,14 +48,14 @@ matLocus <- GRanges("CM002236.1", IRanges(1856288, 1862459)) # mat
 param <- readParam(discard = matLocus, pe="none", max.frag=1500, minq=20 )
 
 #reading in regions of interest
-regions <- list(allgenes_promTSSext = read.table("../bed_files/allgenespromTSSext.bed"), allgenespromTSS = read.table("../bed_files/allgenes_promTSS.bed")) 
+regions <- list(allgenes_promTSSext = read.table("bed_csv_txt_files/bed_files/allgenespromTSSext.bed"), allgenespromTSS = read.table("bed_csv_txt_files/bed_files/allgenes_promTSS.bed")) 
 
 #original list
-# list(K27genes_proms = read.table("../bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("../bed_files/K27_genes_stringent.bed"), K27proms = read.table("../bed_files/K27_promoters.bed"), K27promTSS = read.table("../bed_files/K27_prom_TSS.bed"), allgenes = read.table("../bed_files/all_genes_forR.bed"), K27promTSSext = read.table("../bed_files/K27promTSSext.bed"), allgenespromTSS = read.table("../bed_files/allgenes_promTSS.bed"), allgenes_promTSSext = read.table("../bed_files/allgenespromTSSext.bed")) 
+# list(K27genes_proms = read.table("bed_csv_txt_files/bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("bed_csv_txt_files/bed_files/K27_genes_stringent.bed"), K27proms = read.table("bed_csv_txt_files/bed_files/K27_promoters.bed"), K27promTSS = read.table("bed_csv_txt_files/bed_files/K27_prom_TSS.bed"), allgenes = read.table("bed_csv_txt_files/bed_files/all_genes_forR.bed"), K27promTSSext = read.table("bed_csv_txt_files/bed_files/K27promTSSext.bed"), allgenespromTSS = read.table("bed_csv_txt_files/bed_files/allgenes_promTSS.bed"), allgenes_promTSSext = read.table("bed_csv_txt_files/bed_files/allgenespromTSSext.bed")) 
 
-#K27genes_proms = read.table("../bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("../bed_files/K27_genes_stringent.bed"), K27proms = read.table("../bed_files/K27_promoters.bed"), K27promTSS = read.table("../bed_files/K27_prom_TSS.bed"), allgenes = read.table("../bed_files/all_genes_forR.bed"), K27promTSSext = read.table("../bed_files/K27promTSSext.bed"), 
+#K27genes_proms = read.table("bed_csv_txt_files/bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("bed_csv_txt_files/bed_files/K27_genes_stringent.bed"), K27proms = read.table("bed_csv_txt_files/bed_files/K27_promoters.bed"), K27promTSS = read.table("bed_csv_txt_files/bed_files/K27_prom_TSS.bed"), allgenes = read.table("bed_csv_txt_files/bed_files/all_genes_forR.bed"), K27promTSSext = read.table("bed_csv_txt_files/bed_files/K27promTSSext.bed"), 
 
-new = read.table("../bed_files/H3K27me3_methylated_genes_FINAL.bed")
+new = read.table("bed_csv_txt_files/bed_files/H3K27me3_methylated_genes_FINAL.bed")
 
 regions$K27promTSS = subset(regions$K27promTSS, regions$K27promTSS$V10 %in% new$V10)
 regions$K27proms = subset(regions$K27proms, regions$K27proms$V10 %in% new$V10)
@@ -1829,13 +1821,13 @@ chip_scatter_flex <- function(
 
 ```{r, use scatter plot function}
 #Reading in RNA dfs
-cac1RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv", row.names = 1)
-cac2RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv", row.names = 1)
-cac3RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv", row.names = 1)
-set7RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv", row.names = 1)
-ash1RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__ALL_results_LFC.csv", row.names = 1)
-cac1suz12RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__ALL_results_LFC.csv", row.names = 1)
-suz12RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac1RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac2RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac3RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+set7RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+ash1RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac1suz12RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+suz12RNA= read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__ALL_results_LFC.csv", row.names = 1)
 
 ###Figure 2
 #K27 vs RNA cac-1
