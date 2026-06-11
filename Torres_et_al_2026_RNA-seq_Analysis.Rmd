@@ -7,12 +7,6 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-
-#Set working environment
-workingdir="C:/Users/eddie/Lewis_Lab_Research/GitHub"
-
-#Set working directory to the correct location for working machine
-knitr::opts_knit$set(root.dir = "workingdir")
 ```
 
 ```{r load libraries, echo=FALSE}
@@ -46,7 +40,7 @@ library("scales")
 #Bring in table with un-normalized transcription counts; check.names is important if you have dashes in the gene names 
 ##row.names=1 command sets geneIDs as the row name
 
-countdataInteractors <- read.table("../text_files/readcounts_All_CAF1paper.merged.txt", header=TRUE,stringsAsFactors=FALSE, row.names=1, check.names=FALSE, sep="\t")
+countdataInteractors <- read.table("bed_csv_txt_files/readcounts_All_CAF1paper.merged.txt", header=TRUE,stringsAsFactors=FALSE, row.names=1, check.names=FALSE, sep="\t")
 
 #create matrix containing count data only; i.e. eliminate contig, start, stop, length fields
 ##convert count file to matrix. Note:: I initially tried to use as.matrix, but this didn't work. <- data.matrix(countfile) worked fine.
@@ -96,7 +90,7 @@ Data_Doubles = Averaged_Orderd_KO_data [,c(1,12,3,11)]
 ```{r subseting data to include genes of interest, echo=FALSE} 
 #subset data to sample only PRC2-target genes
 ##reading in geneIDs of PRC2 target genes (promoters and genes fully covered by K27)
-Prc2targets <- read.table("../bed_files/H3K27me3_methylated_genes_FINAL.bed", header=FALSE, stringsAsFactors=FALSE, check.names=FALSE, sep="\t") 
+Prc2targets <- read.table("bed_csv_txt_files/H3K27me3_methylated_genes_FINAL.bed", header=FALSE, stringsAsFactors=FALSE, check.names=FALSE, sep="\t") 
 
 Prc2targetTPM <- subset(allDataTPM, rownames(allDataTPM)%in%Prc2targets[,10])
 
@@ -375,7 +369,7 @@ ash1 <- rowMeans(cts_numeric[, 41:42], na.rm = TRUE)
 ```{r load coldata, echo = FALSE}
 #Loading in column data file. This will be used to assign the counts samples to the correct strains in DESeq
 ##Make sure you have the desired strain listed as a control in this sheet
-coldata <- read.csv("../coldata.csv", header= TRUE, row.names = 1)
+coldata <- read.csv("bed_csv_txt_files/coldata.csv", header= TRUE, row.names = 1)
 coldata$condition <- factor(coldata$condition)
 coldata$type <- factor(coldata$type)
 
@@ -561,8 +555,8 @@ deg_map <- export_deseq_csvs(
   dds2,
   ref_level = "WT",
   strains = c("cac1","cac2","cac3","set7","naf1","naf2","asf1","atrx","cac1_cac2","cac1_suz12","suz12","ash1"),
-  neurospora_bed_path = "../bed_files/neurospora_genes_edit.bed",
-  prc2_targets_path   = "../bed_files/H3K27me3_methylated_genes_FINAL.bed",
+  neurospora_bed_path = "bed_csv_txt_files/neurospora_genes_edit.bed",
+  prc2_targets_path   = "bed_csv_txt_files/H3K27me3_methylated_genes_FINAL.bed",
   lfc_cutoff = 1.0,
   alphas = c(0.05, 0.01)
 )
@@ -591,7 +585,7 @@ deg_map <- export_deseq_csvs(
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
-de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__DE_intersection.csv"
+de_csv_path     <- "bed_csv_txt_files/cac1_cac2__alpha0.05__DE_intersection.csv"
 out_tag  <- "CAF1_shared_GO"
 out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
 out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
@@ -740,7 +734,7 @@ p
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
-de_csv_path <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__UP_intersection.csv"
+de_csv_path <- "bed_csv_txt_files/cac1_cac2__alpha0.05__UP_intersection.csv"
 out_tag <- "CAF1_shared_UP_GO"
 out_res <- paste0(out_tag, "_BP_enrichment.tsv")
 out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
@@ -888,7 +882,7 @@ p
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
-de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__DOWN_intersection.csv"
+de_csv_path     <- "bed_csv_txt_files/cac1_cac2__alpha0.05__DOWN_intersection.csv"
 out_tag  <- "CAF1_shared_DOWN_GO"
 out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
 out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
@@ -1041,7 +1035,7 @@ p
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
-de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__UP_genes.csv"
+de_csv_path     <- "bed_csv_txt_files/cac1_suz12__alpha0.05__UP_genes.csv"
 out_tag  <- "cac1_suz12_UP_GO"
 out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
 out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
@@ -1195,7 +1189,7 @@ p
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
-de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__DOWN_genes.csv"
+de_csv_path     <- "bed_csv_txt_files/cac1_suz12__alpha0.05__DOWN_genes.csv"
 out_tag  <- "cac1_suz12_DOWN_GO"
 out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
 out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
@@ -1341,7 +1335,7 @@ p
 
 ########################################################################################
 ###GO Analysis on H3K27me3-marked genes
-all_genes <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv")
+all_genes <- read.csv("bed_csv_txt_files/cac1__alpha0.05__ALL_results_LFC.csv")
 K27genes  <- subset(all_genes, all_genes$NCU %in% rownames(AVERAGE_Prc2targetTPM))
 
 ## --- paths / outputs ---
@@ -1504,7 +1498,7 @@ p
 
 ########################################################################################
 ###GO Analysis on genes upregulated in set-7
-FP_DE_genes <- read.table(file = "../text_files/FP_DE_genes.txt", header=TRUE, stringsAsFactors=FALSE, row.names=NULL, check.names=FALSE, sep="\t")
+FP_DE_genes <- read.table(file = "bed_csv_txt_files/FP_DE_genes.txt", header=TRUE, stringsAsFactors=FALSE, row.names=NULL, check.names=FALSE, sep="\t")
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
@@ -1666,7 +1660,7 @@ p
 
 ########################################################################################
 ###GO Analysis on genes upregulated in set-7
-set7_DE_genes <- read.table(file = "../text_files/set7_DE_genes.txt", header=TRUE, stringsAsFactors=FALSE, row.names=NULL, check.names=FALSE, sep="\t")
+set7_DE_genes <- read.table(file = "bed_csv_txt_files/set7_DE_genes.txt", header=TRUE, stringsAsFactors=FALSE, row.names=NULL, check.names=FALSE, sep="\t")
 
 ## --- paths / outputs ---
 fungidb_go_path <- "Nc_GO_mapping.txt"
@@ -1832,11 +1826,11 @@ p
 ```{r, Volcano Plots}
 #Make New variables for plot
 ##read csvs with log2FC data
-cac1_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv")
-cac2_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv")
-cac3_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv")
-set7_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv")
-cac1_suz12_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_SUZ12__alpha0.05__ALL_results_LFC.csv")
+cac1_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv")
+cac2_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv")
+cac3_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv")
+set7_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv")
+cac1_suz12_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_SUZ12__alpha0.05__ALL_results_LFC.csv")
 
 #I need to get rid of a few genes with a p-value of 0, as well as the knocked-out gene itself
 cac1_vol <- cac1_vol[cac1_vol$padj != 0, ]
@@ -2159,20 +2153,20 @@ ggsave("./cac1_suz12_volcano_plot_FINAL.pdf", plot=cac1_suz12_volcano_plot, widt
 # Now, I want to make Venn-diagrams to compare the number of genes that are DE across all the CAF-1 mutants & set-7 for K27 genes
 ```{r Make Venn Diagrams, echo=FALSE}
 #read in all Upregulated genes
-cac1UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__UP_genes.csv")
-cac2UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__UP_genes.csv")
-cac3UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__UP_genes.csv")
-set7UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__UP_genes.csv")
+cac1UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__UP_genes.csv")
+cac2UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__UP_genes.csv")
+cac3UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__UP_genes.csv")
+set7UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__UP_genes.csv")
 
-cac1DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__DOWN_genes.csv")
-cac2DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__DOWN_genes.csv")
-cac3DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__DOWN_genes.csv")
-set7DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__DOWN_genes.csv")
+cac1DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__DOWN_genes.csv")
+cac2DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__DOWN_genes.csv")
+cac3DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__DOWN_genes.csv")
+set7DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__DOWN_genes.csv")
 
-cac1_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
-cac2_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__K27_UP_genes.csv")
-cac3_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__K27_UP_genes.csv")
-set7_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
+cac1_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
+cac2_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__K27_UP_genes.csv")
+cac3_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__K27_UP_genes.csv")
+set7_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
 
 #Venn Diagram w/ All Upregulated genes in CAF-1 mutants
 venn.diagram(
@@ -2269,12 +2263,12 @@ venn.diagram(
 CAF1_up_K27K36_fit = euler(c("A" = 126, "B" = 39, "C" = 10, "A&B" = 98, "A&C" = 19, "B&C" = 14, "A&B&C" = 49))
 CAF1_up_K27K36_eulerplot <- plot(CAF1_up_K27K36_fit)
 
-set7_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
-suz12_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__K27_UP_genes.csv")
-ash1_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__K27_UP_genes.csv")
-cac1_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
-cac1_cac2RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__K27_UP_genes.csv")
-cac1_suz12RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__K27_UP_genes.csv")
+set7_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
+suz12_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__K27_UP_genes.csv")
+ash1_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__K27_UP_genes.csv")
+cac1_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
+cac1_cac2RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__K27_UP_genes.csv")
+cac1_suz12RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__K27_UP_genes.csv")
 
 ##################################
 #FIGURE 2
@@ -2558,7 +2552,7 @@ venn.diagram(
 ```{r Make IGV Track, echo=FALSE}
 #calling list of files
 ##Note: this will only work if the ONLY csv's in this directory are the ones containing the Data you want on the track (i.e. you need to move any other csv's from this directory, or move the ones you want on the track to a new one and change the path)
-list_of_files <- list.files(path = "../Research",
+list_of_files <- list.files(path = "bed_csv_txt_files",
                             recursive = FALSE,
                             pattern = ".csv$")
 
@@ -2578,7 +2572,7 @@ l2fc_data[is.na(l2fc_data)] <- 0
 l2fc <- tibble::rownames_to_column(l2fc_data, "VALUE")
 
 #read in file w/ all genes
-ngenes = read.csv("../csv_files/neurospora_genes_edit.csv")
+ngenes = read.csv("bed_csv_txt_files/csv_files/neurospora_genes_edit.csv")
 
 #Make IGV Track
 ##Note: only genes with DE in one or more strains will display data in the track
