@@ -3,9 +3,9 @@ install.packages('dplyr')
 library(readxl)
 library(dplyr)
 
-#replace path with actual location of Dataset 1 and 2
-dataset1 = "C:/Users/eddie/Research_Personal/Dataset_S1_Updated.xlsx"
-dataset2 = "C:/Users/eddie/Research_Personal/Dataset_S2_Updated.xlsx"
+#Fill in with path location of Dataset 1 and 2
+#dataset1 = 
+#dataset2 = 
 sheetnames1 = excel_sheets(dataset1)
 sheetnames = excel_sheets(dataset2)
 
@@ -27,8 +27,8 @@ names(dfs) <- sheetnames
 #K27 genes is our "Background" for tests (n = 571)
 K27genes = dfs$`Dataset S2K`
 #using correct K36 data tables
-K36data = read.csv(file = "C:/Users/eddie/Research_Personal/H3K36me3_Results_allgenespromTSS_vWT.csv")
-K36datainput = read.csv(file = "C:/Users/eddie/Research_Personal/H3K36me3_Results_allgenespromTSS_vinput.csv")
+K36data = read.csv(file = "bed_csv_txt_files/H3K36me3_Results_allgenespromTSS_vWT.csv")
+K36datainput = read.csv(file = "bed_csv_txt_files/H3K36me3_Results_allgenespromTSS_vinput.csv")
 #K27 data from Dataset 2
 K27data = dfs$`Dataset S2C`
 ###########################
