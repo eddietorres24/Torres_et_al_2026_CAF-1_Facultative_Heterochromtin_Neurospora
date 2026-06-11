@@ -1,0 +1,2584 @@
+---
+title: "csaw_function_CLEAN_ET"
+author: "Eddie Torres"
+date: "2025-08-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# Set working environment
+
+workingdir="C:/Users/eddie/Lewis_Lab_Research/GitHub"
+
+#set working directory to the correct location for working machine
+knitr::opts_knit$set(root.dir = "workingdir")
+
+library(dplyr)
+  require(csaw)
+  require(edgeR)
+  library(GenomicRanges)
+  library(Rsamtools)
+  library(S4Vectors)
+  library(SummarizedExperiment)
+
+
+```
+
+```{r, read in metadata & regions of interest}
+#reading in metdata
+meta <- read.csv("../csaw_samples_files/cac_csaw_FINAL.csv")
+#metaQC <- read.csv("../csaw_samples_files/cac_csaw_QC_TEST.csv")
+
+#fix path (if necessary, should only be if you're in wrong directory)
+meta <- meta %>%
+  mutate(bamReads = paste0("../", bamReads))
+
+#metaQC <- metaQC %>%
+  #mutate(bamReads = paste0("../", bamReads))
+
+#meta <- meta %>%
+#mutate(Peaks = paste0("../", Peaks))
+
+#Build group factor from csaw metadata
+grouping <- factor(paste(meta$Strain, meta$Antibody, sep = "."))
+
+#Design matrix using this grouping for downstream comaprisons
+design.mat <- model.matrix(~ 0 + grouping)
+colnames(design.mat) <- levels(grouping)
+
+###########remove mat locus               1856250. 1862401 36 - 37
+matLocus <- GRanges("CM002236.1", IRanges(1856288, 1862459)) # mat
+
+##set parameters for windowCounts
+param <- readParam(discard = matLocus, pe="none", max.frag=1500, minq=20 )
+
+#reading in regions of interest
+regions <- list(allgenes_promTSSext = read.table("../bed_files/allgenespromTSSext.bed"), allgenespromTSS = read.table("../bed_files/allgenes_promTSS.bed")) 
+
+#original list
+# list(K27genes_proms = read.table("../bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("../bed_files/K27_genes_stringent.bed"), K27proms = read.table("../bed_files/K27_promoters.bed"), K27promTSS = read.table("../bed_files/K27_prom_TSS.bed"), allgenes = read.table("../bed_files/all_genes_forR.bed"), K27promTSSext = read.table("../bed_files/K27promTSSext.bed"), allgenespromTSS = read.table("../bed_files/allgenes_promTSS.bed"), allgenes_promTSSext = read.table("../bed_files/allgenespromTSSext.bed")) 
+
+#K27genes_proms = read.table("../bed_files/K27_genes_prom_100pct_overlap.bed"), K27genes = read.table("../bed_files/K27_genes_stringent.bed"), K27proms = read.table("../bed_files/K27_promoters.bed"), K27promTSS = read.table("../bed_files/K27_prom_TSS.bed"), allgenes = read.table("../bed_files/all_genes_forR.bed"), K27promTSSext = read.table("../bed_files/K27promTSSext.bed"), 
+
+new = read.table("../bed_files/H3K27me3_methylated_genes_FINAL.bed")
+
+regions$K27promTSS = subset(regions$K27promTSS, regions$K27promTSS$V10 %in% new$V10)
+regions$K27proms = subset(regions$K27proms, regions$K27proms$V10 %in% new$V10)
+regions$K27genes_proms = subset(regions$K27genes_proms, regions$K27genes_proms$V10 %in% new$V10)
+regions$K27genes = subset(regions$K27genes, regions$K27genes$V10 %in% new$V10)
+regions$K27promTSSext = subset(regions$K27promTSSext, regions$K27promTSSext$V10 %in% new$V10)
+
+###IMPORTANT: the tables you  read into your list should not have a header (i.e., the column names should be V1, V2, ... VX). If your columns have other names, the count function may not recognize it properly. even if the files you read in have headers, i believe you can adjust the way read.table reads it into a df object. check column names in the "regions" object before continuing
+
+#with "list" you can read multiple beds into the function
+
+#once you load in all the metadata and bed with regions, run the first function to count data and make a dge object
+
+```
+
+
+```{r, csaw count & dge function, echo = FALSE}
+###KEY NOTE: leave this and the following functions *unedited*, this is the default function, all you need to do is edit the parameters in the block below and its one-click (blocks flanked by hashtags ###). I explain what each paramter does below, and what each consecutive function does in each block###
+
+#This function will count in your data based on your loaded metadata and provided regions of interests. you will want to include any blacklisted regions (i.e. mat locus) with your param object.
+
+csaw_count_and_fit <- function(
+  metadata_df,
+  region_list = NULL,           # data frame OR named list of data frames (BED-like)
+  mode = c("window", "region"), # choose count mode
+  window_size = 300,            # used only for window mode
+  design_mat,                   # precomputed model matrix
+  param,                        # readParam() object (your defaults will be copied)
+  assign_to_global = TRUE,      # save named objects to global environment
+  return_list = TRUE            # return everything in a nested list
+) {
+  require(csaw)
+  require(edgeR)
+  require(GenomicRanges)
+  require(Rsamtools)
+  require(S4Vectors)
+  require(SummarizedExperiment)
+
+  mode <- match.arg(mode)
+
+  ## ---------------- sanity helpers ----------------
+  df_to_granges <- function(df) {
+    cols <- names(df)
+    chr <- if ("V1" %in% cols) df$V1 else if ("chrom" %in% cols) df$chrom else stop("No chrom/V1 column in region data.frame")
+    start <- if ("V2" %in% cols) df$V2 else if ("start" %in% cols) df$start else stop("No start/V2 column in region data.frame")
+    end   <- if ("V3" %in% cols) df$V3 else if ("end"   %in% cols) df$end   else stop("No end/V3 column in region data.frame")
+    strd  <- if ("V6" %in% cols) df$V6 else if ("strand" %in% cols) df$strand else "*"
+    start <- as.integer(start); end <- as.integer(end)
+    if (any(is.na(start) | is.na(end))) stop("Start/end contain NAs after coercion. Check region input.")
+    GRanges(seqnames = chr, ranges = IRanges(start = start, end = end), strand = strd)
+  }
+
+  as_named_list <- function(x) {
+    if (is.null(x)) return(NULL)
+    if (is.list(x) && !is.data.frame(x)) {
+      if (is.null(names(x)) || any(names(x) == "")) {
+        stop("region_list must be a *named* list, e.g. list(K27genes_proms = df).")
+      }
+      return(x)
+    } else if (is.data.frame(x)) {
+      return(list(genome_set = x))
+    } else {
+      stop("region_list must be a data.frame or a named list of data.frames.")
+    }
+  }
+
+  detect_paired <- function(bam, n = 5000L) {
+    bf <- BamFile(bam, yieldSize = n)
+    open(bf); on.exit(close(bf), add = TRUE)
+    x <- scanBam(bf, param = ScanBamParam(what = "flag"))[[1]]$flag
+    if (length(x) == 0) return(FALSE)
+    # bit 0x1 => isPaired
+    any(bitwAnd(x, 1L) != 0L)
+  }
+
+  # try to clone readParam() while overriding `pe=`
+  set_pe <- function(param_in, pe_mode = c("none","both")) {
+    pe_mode <- match.arg(pe_mode)
+    # Best effort: copy main knobs if present; otherwise fall back to defaults from `param_in`
+    # Extract what we can via show() parsing fallback is messy; instead we accept common fields explicitly:
+    # If slot access works, use it; otherwise default.
+    get_slot <- function(obj, nm, default = NULL) {
+      if (nm %in% slotNames(obj)) slot(obj, nm) else default
+    }
+    rp <- readParam(
+      pe      = pe_mode,
+      max.frag = get_slot(param_in, "max.frag", 1500L),
+      dedup   = get_slot(param_in, "dedup", FALSE),
+      minq    = get_slot(param_in, "minq", 20L),
+      forward = get_slot(param_in, "forward", NA),
+      restrict = get_slot(param_in, "restrict", NULL)
+    )
+    rp
+  }
+
+  stopifnot(is.data.frame(metadata_df))
+  needed <- c("Strain","Antibody","bamReads","Replicate")
+  if (!all(needed %in% names(metadata_df))) {
+    stop("metadata_df must contain columns: Strain, Antibody, Replicate, bamReads")
+  }
+
+  # grouping (used for design compatibility check)
+  grouping <- factor(paste(metadata_df$Strain, metadata_df$Antibody, sep = "."))
+  if (!all(levels(grouping) %in% colnames(design_mat))) {
+    missing_cols <- setdiff(levels(grouping), colnames(design_mat))
+    stop(paste0("design_mat is missing columns for these groups: ", paste(missing_cols, collapse = ", ")))
+  }
+
+  # pretty column labels (samples) used in DGE objects
+  nice_labels <- paste(metadata_df$Strain, metadata_df$Antibody, paste0("R", metadata_df$Replicate), sep = ".")
+
+  # normalize region_list input shape
+  region_list <- as_named_list(region_list)
+
+  # file existence
+  bam_files <- metadata_df$bamReads
+  exist <- file.exists(bam_files)
+  if (!all(exist)) {
+    stop("Missing BAM(s): ", paste(bam_files[!exist], collapse = ", "))
+  }
+
+  # warn about old index timestamps (harmless but noisy)
+  if (interactive()) {
+    bai_exists <- file.exists(paste0(bam_files, ".bai")) | file.exists(sub("\\.bam$", ".bai", bam_files))
+    if (!all(bai_exists)) {
+      warning("One or more BAM index (.bai) files are missing; samtools will auto-index or counts may be slow.")
+    }
+  }
+
+  # detect PE/SE per BAM
+  is_pe <- vapply(bam_files, detect_paired, logical(1))
+  pe_bams <- bam_files[is_pe]
+  se_bams <- bam_files[!is_pe]
+
+  if (length(pe_bams) == 0L && length(se_bams) == 0L) stop("No BAMs detected.")
+  message(sprintf("Detected %d PE and %d SE BAMs.", length(pe_bams), length(se_bams)))
+
+  # build param variants
+  param_pe <- set_pe(param, "both")
+  param_se <- set_pe(param, "none")
+
+  # container
+  out <- list(genomewide = NULL, regions = list())
+
+  # helper: ensure columns are in the original metadata order
+  reorder_se_cols <- function(se_obj, order_bams) {
+    cb <- colData(se_obj)
+    if (!"bam.files" %in% colnames(cb)) {
+      # older csaw versions: rownames of colData are file paths
+      current <- rownames(cb)
+    } else {
+      current <- as.character(cb$bam.files)
+    }
+    idx <- match(order_bams, current)
+    if (anyNA(idx)) {
+      stop("Failed to match counted columns back to original BAM order.")
+    }
+    se_obj[, idx]
+  }
+
+  # helper: run windowCounts for a vector of BAMs (possibly length 0)
+  run_window <- function(bams, rp) {
+    if (length(bams) == 0L) return(NULL)
+    windowCounts(bam.files = bams, spacing = window_size, width = window_size,
+                 shift = 0, filter = 0, bin = TRUE, param = rp)
+  }
+
+  # helper: run regionCounts for a vector of BAMs
+  run_region <- function(bams, rp, gr) {
+    if (length(bams) == 0L) return(NULL)
+    regionCounts(bam.files = bams, regions = gr, param = rp)
+  }
+
+  # helper: bind two SE objects after verifying rows match
+  bind2 <- function(a, b) {
+    if (is.null(a)) return(b)
+    if (is.null(b)) return(a)
+    if (!identical(rowRanges(a), rowRanges(b))) {
+      stop("Row ranges do not match between SE and PE counting—this should not happen. Check genome/spacing/regions.")
+    }
+    cbind(a, b)
+  }
+
+  # helper: fast fail if any sample has zero total counts
+  stop_if_zero_totals <- function(se_obj, context_label) {
+    tot <- colSums(assay(se_obj))
+    bad <- which(tot == 0)
+    if (length(bad)) {
+      cb <- colData(se_obj)
+      labs <- if ("bam.files" %in% colnames(cb)) as.character(cb$bam.files) else rownames(cb)
+      stop(sprintf("Zero total counts in %s for samples: %s\nThis yields non-finite offsets; fix inputs or region set and retry.",
+                   context_label, paste(labs[bad], collapse = ", ")))
+    }
+    invisible(NULL)
+  }
+
+  ## ---------------- counting & modeling ----------------
+  if (mode == "window") {
+    message("Counting genome-wide windows (spacing/width = ", window_size, ") ...")
+
+    data_pe <- run_window(pe_bams, param_pe)
+    data_se <- run_window(se_bams, param_se)
+    data_all <- bind2(data_se, data_pe)
+    if (is.null(data_all)) stop("No windows counted (empty result).")
+
+    # Put columns back to original metadata order
+    data_all <- reorder_se_cols(data_all, bam_files)
+
+    # fail fast on zero sums
+    stop_if_zero_totals(data_all, "genome-wide windows")
+
+    # DGE/disp/fit with sample labels and grouping
+    dge_all  <- asDGEList(data_all, group = grouping)
+    colnames(dge_all$counts) <- nice_labels
+    rownames(dge_all$samples) <- nice_labels
+
+    disp_all <- estimateDisp(dge_all, design_mat)
+    fit_all  <- glmQLFit(disp_all, design_mat, robust = TRUE)
+
+    if (assign_to_global) {
+      assign("dge_genomewide",  dge_all,  envir = .GlobalEnv)
+      assign("disp_genomewide", disp_all, envir = .GlobalEnv)
+      assign("fit_genomewide",  fit_all,  envir = .GlobalEnv)
+    }
+    out$genomewide <- list(dge = dge_all, disp = disp_all, fit = fit_all, counts = data_all)
+
+    # Optional: filtered genome-wide → region subsets
+    if (!is.null(region_list)) {
+      rr_all <- rowRanges(data_all)
+      for (nm in names(region_list)) {
+        message("Filtering genome-wide windows to region set: ", nm)
+        gr <- df_to_granges(region_list[[nm]])
+        keep <- overlapsAny(rr_all, gr, type = "within")
+        filtered <- data_all[keep, ]
+
+        stop_if_zero_totals(filtered, paste0("filtered windows (", nm, ")"))
+
+        dge  <- asDGEList(filtered, group = grouping)
+        colnames(dge$counts) <- nice_labels
+        rownames(dge$samples) <- nice_labels
+        disp <- estimateDisp(dge, design_mat)
+        fit  <- glmQLFit(disp, design_mat, robust = TRUE)
+
+        safe <- make.names(nm)
+        if (assign_to_global) {
+          assign(paste0("gr_",   safe), gr,   envir = .GlobalEnv)
+          assign(paste0("dge_",  safe), dge,  envir = .GlobalEnv)
+          assign(paste0("disp_", safe), disp, envir = .GlobalEnv)
+          assign(paste0("fit_",  safe), fit,  envir = .GlobalEnv)
+        }
+        out$regions[[nm]] <- list(gr = gr, dge = dge, disp = disp, fit = fit, counts = filtered)
+      }
+    }
+
+  } else { # mode == "region"
+    if (is.null(region_list)) stop("In region mode, region_list (one or more BED data.frames) is required.")
+    for (nm in names(region_list)) {
+      message("Counting over regions: ", nm)
+      gr <- df_to_granges(region_list[[nm]])
+
+      counts_pe <- run_region(pe_bams, param_pe, gr)
+      counts_se <- run_region(se_bams, param_se, gr)
+      counts_all <- bind2(counts_se, counts_pe)
+      if (is.null(counts_all)) stop("No region counts returned (empty result).")
+
+      # Reorder to original BAM order
+      counts_all <- reorder_se_cols(counts_all, bam_files)
+
+      stop_if_zero_totals(counts_all, paste0("regions (", nm, ")"))
+
+      dge  <- asDGEList(counts_all, group = grouping)
+      colnames(dge$counts) <- nice_labels
+      rownames(dge$samples) <- nice_labels
+      disp <- estimateDisp(dge, design_mat)
+      fit  <- glmQLFit(disp, design_mat, robust = TRUE)
+
+      safe <- make.names(nm)
+      if (assign_to_global) {
+        assign(paste0("gr_",   safe), gr,   envir = .GlobalEnv)
+        assign(paste0("dge_",  safe), dge,  envir = .GlobalEnv)
+        assign(paste0("disp_", safe), disp, envir = .GlobalEnv)
+        assign(paste0("fit_",  safe), fit,  envir = .GlobalEnv)
+      }
+      out$regions[[nm]] <- list(gr = gr, dge = dge, disp = disp, fit = fit, counts = counts_all)
+    }
+  }
+
+  if (return_list) return(out) else invisible(NULL)
+}
+
+```
+
+###########################################################################################
+```{r, run count & fit function in window mode, echo = FALSE}
+
+#This is where you change the parameters and run the function
+count_results <- csaw_count_and_fit(
+  metadata_df = meta,
+  region_list = window,
+  mode = "region", #"region" or "window"
+  window_size = 300,
+  design_mat = design.mat,
+  param = param
+)
+
+```
+###########################################################################################
+
+```{r, QC function}
+# ============================================================
+# DIFFBIND-ONLY: build ALL-sample sheet, robust fallbacks,
+# PCA (by modification, no labels), correlation heatmap
+# (no dendrogram, no labels), and Excel/CSV export of
+# correlation matrix. No ChIPQC code here.
+# ============================================================
+suppressPackageStartupMessages({
+  library(DiffBind)
+  library(dplyr)
+  library(stringr)
+  library(tools)
+})
+
+# ---------- helpers ----------
+.safe_dir <- function(d){
+  if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+  normalizePath(d, mustWork = FALSE)
+}
+
+.is_input_row <- function(df){
+  fields <- paste(
+    if ("Antibody" %in% names(df)) df$Antibody else "",
+    if ("Factor"   %in% names(df)) df$Factor   else "",
+    if ("SampleID" %in% names(df)) df$SampleID else "",
+    sep = " "
+  )
+  grepl("(^|[^A-Za-z])input([^A-Za-z]|$)", tolower(fields), perl = TRUE)
+}
+
+.make_numeric_replicate <- function(df){
+  rep_num <- NA_integer_
+  if ("Replicate" %in% names(df)) {
+    rep_num <- suppressWarnings(as.integer(gsub("\\D", "", as.character(df$Replicate))))
+  }
+  if (all(is.na(rep_num))) {
+    grp <- if ("Strain" %in% names(df)) interaction(df$Antibody, df$Strain, drop=TRUE) else df$Antibody
+    rep_num <- ave(seq_len(nrow(df)), grp, FUN = function(x) seq_along(x))
+  }
+  as.integer(rep_num)
+}
+
+.guess_peakcaller <- function(p){
+  ext <- tolower(file_ext(p))
+  if (ext == "narrowpeak") return("narrow")
+  if (ext == "broadpeak")  return("broad")
+  "bed"
+}
+
+.clean_peak_file <- function(src, out_tmp_dir){
+  .safe_dir(out_tmp_dir)
+  dst <- file.path(out_tmp_dir, basename(src))
+  con_in  <- file(src, open="r")
+  con_out <- file(dst, open="w")
+  on.exit({ close(con_in); close(con_out) }, add=TRUE)
+  repeat {
+    ln <- readLines(con_in, n=10000, warn=FALSE)
+    if (length(ln) == 0) break
+    ln <- ln[!grepl("^\\s*(track|browser)\\b", ln, ignore.case=TRUE)]
+    keep <- vapply(strsplit(ln, "\t", fixed=TRUE), function(v) length(v) >= 3, logical(1))
+    if (any(keep)) writeLines(ln[keep], con_out)
+  }
+  dst
+}
+
+.make_db_sheet <- function(inc, force_peakcaller=NULL, cleaned_dir=NULL){
+  pc_vals <- if (!is.null(force_peakcaller)) {
+    rep(force_peakcaller, nrow(inc))
+  } else if ("PeakCaller" %in% names(inc)) {
+    as.character(inc$PeakCaller)
+  } else {
+    vapply(inc$Peaks, .guess_peakcaller, "")
+  }
+
+  peak_paths <- if (is.null(cleaned_dir)) {
+    as.character(inc$Peaks)
+  } else {
+    vapply(as.character(inc$Peaks), .clean_peak_file, "", out_tmp_dir=cleaned_dir)
+  }
+
+  inc %>%
+    mutate(
+      Factor     = if ("Factor" %in% names(.)) as.character(Factor) else as.character(Antibody),
+      Condition  = dplyr::case_when(
+        "Condition" %in% names(.) ~ as.character(Condition),
+        "Strain"    %in% names(.) ~ as.character(Strain),
+        TRUE ~ "All"
+      ),
+      Replicate  = .make_numeric_replicate(.),
+      PeakCaller = pc_vals,
+      Peaks      = peak_paths
+    ) %>%
+    transmute(
+      SampleID   = as.character(SampleID),
+      Factor     = as.character(Factor),
+      Condition  = as.character(Condition),
+      Replicate  = as.integer(Replicate),
+      bamReads   = as.character(bamReads),
+      Peaks      = as.character(Peaks),
+      PeakCaller = as.character(PeakCaller)
+    )
+}
+
+# ---- DiffBind run with the 3-attempt fallback you used ----
+.run_diffbind_all <- function(inc, out_dir){
+  db_out <- .safe_dir(file.path(out_dir, "DiffBind_ALL"))
+
+  # Attempt 1: use declared/guessed PeakCaller
+  db_sheet1 <- .make_db_sheet(inc, force_peakcaller=NULL, cleaned_dir=NULL)
+  message("[DiffBind] Attempt 1 — PeakCaller values: ", paste(unique(db_sheet1$PeakCaller), collapse=", "))
+  message("[DiffBind] Example rows:"); print(utils::head(db_sheet1, 1))
+  dbObj <- tryCatch(dba(sampleSheet = as.data.frame(db_sheet1)), error=function(e) e)
+
+  if (inherits(dbObj, "error")) {
+    message("  ⚠️  Attempt 1 failed: ", conditionMessage(dbObj))
+
+    # Attempt 2: force PeakCaller='bed'
+    db_sheet2 <- .make_db_sheet(inc, force_peakcaller="bed", cleaned_dir=NULL)
+    message("[DiffBind] Attempt 2 — forcing PeakCaller='bed'"); print(utils::head(db_sheet2, 5))
+    dbObj <- tryCatch(dba(sampleSheet = as.data.frame(db_sheet2)), error=function(e) e)
+
+    if (inherits(dbObj, "error")) {
+      message("  ⚠️  Attempt 2 failed: ", conditionMessage(dbObj))
+
+      # Attempt 3: cleaned peaks + bed
+      clean_dir <- .safe_dir(file.path(db_out, "cleaned_peaks"))
+      db_sheet3 <- .make_db_sheet(inc, force_peakcaller="bed", cleaned_dir=clean_dir)
+      message("[DiffBind] Attempt 3 — cleaned peaks + PeakCaller='bed'")
+      dbObj <- tryCatch(dba(sampleSheet = as.data.frame(db_sheet3)), error=function(e) e)
+
+      if (inherits(dbObj, "error")) {
+        stop("[DiffBind] dba() failed after 3 attempts.\n",
+             " • Attempt 1 PeakCaller(s): ", paste(unique(db_sheet1$PeakCaller), collapse=", "), "\n",
+             " • Attempt 2 forced 'bed'\n",
+             " • Attempt 3 cleaned peaks + 'bed'\n",
+             "Last error: ", conditionMessage(dbObj))
+      } else {
+        message("  ✅ DiffBind succeeded (Attempt 3, cleaned 'bed').")
+      }
+    } else {
+      message("  ✅ DiffBind succeeded (Attempt 2, PeakCaller='bed').")
+    }
+  } else {
+    message("  ✅ DiffBind succeeded (Attempt 1).")
+  }
+
+  # === Plots ===
+  # PCA — colored by Factor (mod), NO labels
+  pca_pdf <- file.path(db_out, "DiffBind_PCA_ALL_byMod_nolabels.pdf")
+  pdf(pca_pdf, width = 7, height = 6)
+  dba.plotPCA(dbObj, attributes = DBA_FACTOR, label = NULL, b3d = FALSE)
+  dev.off()
+  message("  ✅ PCA (by mod, no labels): ", pca_pdf)
+
+  # Correlation heatmap — NO dendrogram, NO labels
+  corr_pdf <- file.path(db_out, "DiffBind_corr_ALL_nodendro_nolabels.pdf")
+  pdf(corr_pdf, width = 8.5, height = 7.5)
+  dba.plotHeatmap(
+    dbObj,
+    correlations = TRUE,
+    dendrogram   = "none",
+    cexRow       = 0.001,
+    cexCol       = 0.001
+  )
+  dev.off()
+  message("  ✅ Correlation heatmap (no dendrogram / no labels): ", corr_pdf)
+
+  invisible(dbObj)
+}
+
+# ---- Export correlation matrix to Excel/CSV ----
+export_diffbind_correlations <- function(dbObj,
+                                         out_file = "DiffBind_ALL/DiffBind_correlations.xlsx",
+                                         method = c("pearson","spearman")) {
+  method <- match.arg(method)
+  out_dir <- dirname(out_file)
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+  mat <- tryCatch(dba.normalize(dbObj, bRetrieve = TRUE), error = function(e) NULL)
+  if (is.null(mat)) mat <- tryCatch(dbObj$binding, error = function(e) NULL)
+  if (is.null(mat)) stop("Could not retrieve a binding matrix from dbObj.")
+
+  mat <- as.matrix(mat)
+  if (is.null(colnames(mat))) {
+    sm <- tryCatch(dba.show(dbObj, bSamples = TRUE), error = function(e) NULL)
+    colnames(mat) <- if (!is.null(sm) && "SampleID" %in% names(sm)) sm$SampleID else paste0("S", seq_len(ncol(mat)))
+  }
+
+  cor_mat <- stats::cor(mat, method = method, use = "pairwise.complete.obs")
+
+  ok_xlsx <- requireNamespace("writexl", quietly = TRUE)
+  cor_df <- as.data.frame(cor_mat, check.names = FALSE)
+  cor_df <- cbind(Sample = rownames(cor_df), cor_df)
+
+  if (ok_xlsx) {
+    writexl::write_xlsx(list(Correlations = cor_df), out_file)
+    message("Wrote Excel: ", normalizePath(out_file))
+  } else {
+    csv_file <- sub("\\.xlsx$", ".csv", out_file)
+    utils::write.csv(cor_df, csv_file, row.names = FALSE)
+    message("Package 'writexl' not installed; wrote CSV instead: ", normalizePath(csv_file))
+  }
+
+  invisible(cor_mat)
+}
+
+# ---------- MAIN ENTRY ----------
+run_diffbind_only <- function(metadata, out_dir = "QC_All") {
+  .safe_dir(out_dir)
+
+  # metadata: data.frame or path to CSV
+  if (is.character(metadata) && length(metadata) == 1 && file.exists(metadata)) {
+    meta <- read.csv(metadata, stringsAsFactors = FALSE)
+  } else if (is.data.frame(metadata)) {
+    meta <- metadata
+  } else {
+    stop("`metadata` must be a data.frame or a path to an existing CSV file.")
+  }
+
+  req <- c("SampleID", "Antibody", "bamReads", "Peaks")
+  miss <- setdiff(req, names(meta))
+  if (length(miss)) stop("Metadata missing column(s): ", paste(miss, collapse = ", "))
+
+  meta <- meta %>%
+    mutate(
+      SampleID = as.character(SampleID),
+      Antibody = as.character(Antibody),
+      bamReads = as.character(bamReads),
+      Peaks    = as.character(Peaks),
+      is_input = .is_input_row(.),
+      bam_ok   = !is.na(bamReads) & bamReads != "" & file.exists(bamReads),
+      peak_ok  = !is.na(Peaks)    & Peaks    != "" & file.exists(Peaks)
+    )
+
+  inc <- meta %>% filter(!is_input & bam_ok & peak_ok)
+
+  message("Total rows: ", nrow(meta))
+  message("Included (non-input, files present): ", nrow(inc))
+  if (nrow(inc) == 0) stop("No valid rows after filtering (non-input + files exist).")
+
+  message("\n[DiffBind] Running with fallbacks …")
+  dbObj <- .run_diffbind_all(inc, out_dir = out_dir)
+
+  # Optional: also export correlation matrix
+  export_diffbind_correlations(dbObj, file.path(out_dir, "DiffBind_ALL", "DiffBind_correlations.xlsx"))
+
+  invisible(dbObj)
+}
+
+
+
+# ============================================================
+# ChIPQC-only (per modification) — with safe broadPeak normalizer
+# - Independent from DiffBind (do not source/run together)
+# - Forces PeakCaller="bed"
+# - Adds missing 10th 'peak' column to broadPeak files (if absent)
+# - One full ChIPQC report per Antibody
+# - No tryCatch wrappers / no recounting pre-checks
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(ChIPQC)
+  library(BiocParallel)
+  library(dplyr)
+  library(data.table)
+  library(tools)
+})
+
+# ---------- helpers ----------
+.safe_dir <- function(d){
+  if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+  normalizePath(d, mustWork = FALSE)
+}
+
+.is_input_row <- function(df){
+  fields <- paste(
+    if ("Antibody" %in% names(df)) df$Antibody else "",
+    if ("Factor"   %in% names(df)) df$Factor   else "",
+    if ("SampleID" %in% names(df)) df$SampleID else "",
+    sep = " "
+  )
+  grepl("(^|[^A-Za-z])input([^A-Za-z]|$)", tolower(fields), perl = TRUE)
+}
+
+.make_numeric_replicate <- function(df){
+  rep_num <- NA_integer_
+  if ("Replicate" %in% names(df)) {
+    rep_num <- suppressWarnings(as.integer(gsub("\\D", "", as.character(df$Replicate))))
+  }
+  if (all(is.na(rep_num))) {
+    grp <- if ("Strain" %in% names(df)) interaction(df$Antibody, df$Strain, drop=TRUE) else df$Antibody
+    rep_num <- ave(seq_len(nrow(df)), grp, FUN = function(x) seq_along(x))
+  }
+  as.integer(rep_num)
+}
+
+# Add a 10th 'peak' column to broadPeak if missing; enforce numeric types
+normalize_broadpeak <- function(src, out_dir){
+  .safe_dir(out_dir)
+  dst <- file.path(out_dir, basename(src))
+  dt  <- fread(src, sep = "\t", header = FALSE, data.table = TRUE, showProgress = FALSE)
+  n   <- ncol(dt)
+  if (n < 3) stop("Peak file malformed (<3 columns): ", src)
+
+  if (n == 9) {
+    dt[, V10 := -1L]
+  } else if (n >= 10) {
+    dt <- dt[, 1:10]
+  } else if (n > 3 && n < 9) { # pad to 9, then add 10
+    for (k in (n+1):9) dt[[paste0("V", k)]] <- NA
+    dt[, V10 := -1L]
+  }
+  setnames(dt, paste0("V", 1:10))
+
+  # enforce numeric where expected
+  dt[, V2 := as.integer(V2)]
+  dt[, V3 := as.integer(V3)]
+  suppressWarnings({
+    dt[, V5  := as.numeric(V5)]   # score
+    dt[, V7  := as.numeric(V7)]   # signalValue
+    dt[, V8  := as.numeric(V8)]   # pValue
+    dt[, V9  := as.numeric(V9)]   # qValue
+    dt[, V10 := as.integer(V10)]  # peak
+  })
+
+  fwrite(dt, dst, sep = "\t", col.names = FALSE)
+  dst
+}
+
+# Attach cleaned copies for selected rows; originals untouched
+attach_clean_peaks <- function(metadata, out_root, only_mod_regex = "H3K4me2"){
+  cleaned_dir <- .safe_dir(file.path(out_root, "cleaned_peaks"))
+  md <- metadata
+
+  idx <- if (is.null(only_mod_regex) || only_mod_regex == "") {
+    rep(TRUE, nrow(md))                         # normalize ALL
+  } else {
+    grepl(only_mod_regex, md$Antibody, ignore.case = TRUE)  # normalize matching mods
+  }
+  if (!any(idx)) return(md)
+
+  md$Peaks[idx] <- vapply(md$Peaks[idx], normalize_broadpeak, character(1), out_dir = cleaned_dir)
+  md
+}
+
+# ---------- main ----------
+run_chipqc_only <- function(metadata, out_dir = "QC_ChIPQCOnly", normalize_only_mod_regex = "H3K4me2") {
+  .safe_dir(out_dir)
+  register(BiocParallel::SerialParam())
+
+  # accept data.frame or CSV path
+  if (is.character(metadata) && length(metadata) == 1 && file.exists(metadata)) {
+    meta <- read.csv(metadata, stringsAsFactors = FALSE)
+  } else if (is.data.frame(metadata)) {
+    meta <- metadata
+  } else {
+    stop("`metadata` must be a data.frame or a path to an existing CSV.")
+  }
+
+  # required columns
+  req <- c("SampleID", "Antibody", "bamReads", "Peaks")
+  miss <- setdiff(req, names(meta))
+  if (length(miss)) stop("Metadata missing column(s): ", paste(miss, collapse = ", "))
+
+  # normalize metadata
+  meta <- meta %>%
+    mutate(
+      SampleID  = as.character(SampleID),
+      Antibody  = as.character(Antibody),
+      bamReads  = as.character(bamReads),
+      Peaks     = as.character(Peaks),
+      is_input  = .is_input_row(.),
+      bam_ok    = !is.na(bamReads) & bamReads != "" & file.exists(bamReads),
+      peak_ok   = !is.na(Peaks)    & Peaks    != "" & file.exists(Peaks)
+    )
+
+  # keep only non-input rows with both files present
+  inc <- meta %>% filter(!is_input & bam_ok & peak_ok)
+
+  message("Total rows: ", nrow(meta))
+  message("Included for ChIPQC: ", nrow(inc))
+  if (nrow(inc) == 0) stop("No valid rows for ChIPQC after filtering.")
+
+  # Normalize broadPeak files to 10 columns for selected modifications (default: H3K4me2)
+  inc <- attach_clean_peaks(inc, out_root = out_dir, only_mod_regex = normalize_only_mod_regex)
+
+  # One report per Antibody
+  mods <- unique(inc$Antibody)
+  message("\n[ChIPQC] Generating reports per modification…")
+  for (mod in mods) {
+    mod_df  <- inc %>% filter(Antibody == mod)
+    mod_out <- .safe_dir(file.path(out_dir, paste0("ChIPQC_", mod)))
+    message("  [", mod, "] Samples: ", paste(mod_df$SampleID, collapse = ", "))
+
+    chip_sheet <- mod_df %>%
+      mutate(
+        Tissue     = if ("Tissue" %in% names(.)) as.character(Tissue) else "All",
+        Condition  = if ("Condition" %in% names(.)) as.character(Condition) else
+                       if ("Strain" %in% names(.)) as.character(Strain) else "All",
+        Factor     = if ("Factor" %in% names(.)) as.character(Factor) else Antibody,
+        Replicate  = .make_numeric_replicate(.),
+        PeakCaller = "bed"   # force BED to avoid score/ID assumptions
+      ) %>%
+      select(SampleID, Tissue, Factor, Condition, Replicate, bamReads, Peaks, PeakCaller)
+
+    chipObj <- ChIPQC(as.data.frame(chip_sheet))
+    ChIPQCreport(
+      chipObj,
+      reportName   = paste0("ChIPQC_report_", mod),
+      reportFolder = mod_out
+    )
+    message("    ✅ Report: ", mod_out)
+  }
+
+  message("\nDone (ChIPQC only). Outputs in: ", normalizePath(out_dir))
+}
+
+# =========================
+# Export ChIPQC metrics → Excel
+# (one sheet per modification + a combined sheet)
+# =========================
+suppressPackageStartupMessages({
+  library(ChIPQC)
+  library(dplyr)
+  library(writexl)   # install.packages("writexl") if needed
+  library(tools)
+})
+
+.safe_dir <- function(d){
+  if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+  normalizePath(d, mustWork = FALSE)
+}
+
+.is_input_row <- function(df){
+  fields <- paste(
+    if ("Antibody" %in% names(df)) df$Antibody else "",
+    if ("Factor"   %in% names(df)) df$Factor   else "",
+    if ("SampleID" %in% names(df)) df$SampleID else "",
+    sep = " "
+  )
+  grepl("(^|[^A-Za-z])input([^A-Za-z]|$)", tolower(fields), perl = TRUE)
+}
+
+.make_numeric_replicate <- function(df){
+  rep_num <- NA_integer_
+  if ("Replicate" %in% names(df)) {
+    rep_num <- suppressWarnings(as.integer(gsub("\\D", "", as.character(df$Replicate))))
+  }
+  if (all(is.na(rep_num))) {
+    grp <- if ("Strain" %in% names(df)) interaction(df$Antibody, df$Strain, drop=TRUE) else df$Antibody
+    rep_num <- ave(seq_len(nrow(df)), grp, FUN = function(x) seq_along(x))
+  }
+  as.integer(rep_num)
+}
+
+chipqc_metrics_to_excel <- function(metadata, out_dir = "QC_ChIPQCOnly", xlsx_file = "ChIPQC_metrics.xlsx"){
+  .safe_dir(out_dir)
+
+  # accept data.frame or CSV path
+  if (is.character(metadata) && length(metadata) == 1 && file.exists(metadata)) {
+    meta <- read.csv(metadata, stringsAsFactors = FALSE)
+  } else if (is.data.frame(metadata)) {
+    meta <- metadata
+  } else {
+    stop("`metadata` must be a data.frame or a path to an existing CSV.")
+  }
+
+  req <- c("SampleID","Antibody","bamReads","Peaks")
+  miss <- setdiff(req, names(meta))
+  if (length(miss)) stop("Metadata missing column(s): ", paste(miss, collapse = ", "))
+
+  meta <- meta %>%
+    mutate(
+      SampleID = as.character(SampleID),
+      Antibody = as.character(Antibody),
+      bamReads = as.character(bamReads),
+      Peaks    = as.character(Peaks),
+      is_input = .is_input_row(.),
+      bam_ok   = !is.na(bamReads) & bamReads != "" & file.exists(bamReads),
+      peak_ok  = !is.na(Peaks)    & Peaks    != "" & file.exists(Peaks)
+    ) %>%
+    filter(!is_input & bam_ok & peak_ok)
+
+  if (!nrow(meta)) stop("No valid rows after filtering.")
+
+  mods <- unique(meta$Antibody)
+  sheets <- list()
+  all_rows <- list()
+
+  message("[ChIPQC] Collecting metrics for: ", paste(mods, collapse=", "))
+
+  for (mod in mods) {
+    mod_df <- meta %>% filter(Antibody == mod)
+
+    # Minimal ChIPQC sheet; force PeakCaller='bed' to avoid score requirements
+    chip_sheet <- mod_df %>%
+      mutate(
+        Tissue     = if ("Tissue" %in% names(.)) as.character(Tissue) else "All",
+        Condition  = if ("Condition" %in% names(.)) as.character(Condition) else
+                       if ("Strain" %in% names(.)) as.character(Strain) else "All",
+        Factor     = if ("Factor" %in% names(.)) as.character(Factor) else Antibody,
+        Replicate  = .make_numeric_replicate(.),
+        PeakCaller = "bed"
+      ) %>%
+      select(SampleID, Tissue, Factor, Condition, Replicate, bamReads, Peaks, PeakCaller)
+
+    chipObj <- ChIPQC(as.data.frame(chip_sheet))
+
+    # Extract per-sample metrics
+    met <- as.data.frame(QCmetrics(chipObj))
+    # carry useful annotations
+    met <- met %>%
+      mutate(
+        Antibody  = mod,
+        Condition = chip_sheet$Condition[match(met$Sample, chip_sheet$SampleID)],
+        Replicate = chip_sheet$Replicate[match(met$Sample, chip_sheet$SampleID)]
+      ) %>%
+      relocate(Antibody, Sample, Condition, Replicate)
+
+    sheets[[mod]] <- met
+    all_rows[[mod]] <- met
+  }
+
+  # write one workbook with multiple sheets (+ combined)
+  combined <- dplyr::bind_rows(all_rows)
+  wb_path  <- file.path(out_dir, xlsx_file)
+  writexl::write_xlsx(c(sheets, list(`ALL_mods_combined` = combined)), path = wb_path)
+  message("✅ Wrote metrics workbook: ", wb_path)
+
+  invisible(wb_path)
+}
+
+```
+
+#Running QC for all strains
+###########################################################################################
+```{r, Run QC function}
+
+#This is where you change the parameters and run the function
+run_diffbind_only(metaQC, out_dir = "QC_DiffBindOnly")
+run_chipqc_only(metaQC, out_dir = "QC_ChIPQCOnly")
+chipqc_metrics_to_excel(metaQC, out_dir = "QC_ChIPQCOnly", xlsx_file = "ChIPQC_metrics.xlsx")
+
+meta_k4 <- subset(metaQC, grepl("H3K4me2", Antibody, ignore.case = TRUE))
+run_chipqc_only(meta_k4, out_dir = "QC_ChIPQCOnly_H3K4me2", normalize_only_mod_regex = NULL)
+
+
+```
+###########################################################################################
+
+```{r, csaw analysis fucntion}
+#This function is going to now analyze the data that you have read in, and calculate the signal over background, normalized to input or WT (or another strain for interest). It will make a couple dataframes for each normalization, for each modifcation analyzed: one with all results (log2FC, FDR, etc.), and one with only log2FC values for heatmap generation. There is also options built in to write analyzed data & statistics to a csv, as well as make an igv track for browser visualization.
+#
+# - WINDOW mode filters:
+#     * vInput: keep windows where at least 1 strain is (FDR<=cut &/or P<=cut) AND logFC>0,
+#               then zero per-strain logFC where that strain FAILS (or logFC<=0)
+#     * vRef  : keep windows where at least 1 strain is (FDR<=cut &/or P<=cut) (+ or -),
+#               then zero per-strain logFC where that strain FAILS.
+#     * this is useful for "de-novo" enrichment dsicovery (i.e. like a peak-caller)
+#
+# - REGION mode filters:
+#     * No masking by default; if mask_region=TRUE, zero per-strain logFC by FDR/P-val
+# ---- Run csaw contrasts across ALL mods & ALL region sets ----
+#
+
+csaw_analysis <- function(
+  metadata_df,
+  design_mat,
+  mode = c("window","region"),
+  out_obj = NULL,
+  reference_strain = "WT",
+  fdr_cutoff = 0.05,
+  pvalue_cutoff = NULL,
+  mask_region = FALSE,
+  write_csv_results = FALSE,
+  write_csv_heatmap = FALSE,
+  write_igv = FALSE,
+  out_dir = "csaw_results",
+  merge_tol = 300,
+  # ---- NEW knobs for gene_id attach ----
+  add_gene_id = TRUE,
+  regions_lookup = NULL,            # named list, e.g. list(K27promTSS = regions$K27promTSS)
+  regions_gene_col = NULL,          # force a particular column name in lookup (e.g., "V10"); NULL=auto
+  verbose_gene_map = TRUE
+) {
+  require(edgeR)
+  require(limma)
+  require(csaw)
+  require(GenomicRanges)
+  require(S4Vectors)
+
+  mode <- match.arg(mode)
+  if (is.null(out_obj)) stop("out_obj is required (use the list returned by csaw_count_and_fit).")
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+  # ---------- helpers ----------
+  order_cols_wt_first <- function(nms, wt = "WT") {
+    wt_hit <- grep(paste0("^logFC_", wt, "$"), nms, value = TRUE)
+    rest   <- setdiff(nms, wt_hit)
+    c(wt_hit, rest)
+  }
+
+  # IGV writer: coords from results (ordered to match heatmap rows), values from heatmap
+  .write_igv_from_heatmap <- function(res_df, hm_df, file_path) {
+    if (!nrow(hm_df)) {
+      warning("Heatmap df has 0 rows; skipping IGV: ", basename(file_path))
+      return(invisible(NULL))
+    }
+    res_key <- paste(res_df$seqnames, res_df$start, res_df$end, sep = ".")
+    idx <- match(rownames(hm_df), res_key)
+    miss <- which(is.na(idx))
+    if (length(miss)) {
+      warning("Some heatmap rows not found in results; dropping ", length(miss), " rows for IGV.")
+      keep <- !is.na(idx)
+      hm_df <- hm_df[keep, , drop = FALSE]
+      idx <- idx[keep]
+      if (!length(idx)) {
+        warning("No overlap between heatmap and results; skipping IGV.")
+        return(invisible(NULL))
+      }
+    }
+    res_sel <- res_df[idx, c("seqnames","start","end","name"), drop = FALSE]
+    out <- cbind(res_sel, hm_df)  # values from heatmap (masked/filtered)
+    write.table(out, file_path, sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+
+  # store vInput row keys and masked vInput heatmaps per (mod, region_tag)
+  keep_coords_env <- new.env(parent = emptyenv())
+  vin_heatmap_env <- new.env(parent = emptyenv())
+
+  # ---------- NEW: gene_id helpers (REGION mode only) ----------
+  .guess_gene_id_from_gr <- function(gr) {
+    if (is.null(gr)) return(NULL)
+    mc <- S4Vectors::mcols(gr)
+    if (is.null(mc) || ncol(mc) == 0) return(NULL)
+    candidates <- c("gene_id","gene","V10","V11","Gene","GeneID","gene_name","Name","name","symbol")
+    candidates <- intersect(candidates, colnames(mc))
+    if (!length(candidates)) return(NULL)
+    if (!is.null(regions_gene_col) && regions_gene_col %in% candidates) {
+      vals <- as.character(mc[[regions_gene_col]])
+      return(vals)
+    }
+    for (cn in candidates) {
+      vals <- as.character(mc[[cn]])
+      if (any(!is.na(vals) & nzchar(vals))) return(vals)
+    }
+    NULL
+  }
+
+  .attach_gene_id_from_df <- function(final_df, df_lookup, region_tag = NA_character_) {
+    if (is.null(df_lookup)) return(final_df)
+    # figure out columns for chr/start/end
+    if (is.null(colnames(df_lookup))) {
+      # assume BED-like: first three columns are chr, start, end
+      chr_col <- 1; start_col <- 2; end_col <- 3
+    } else {
+      # prefer typical column names; else fallback to first three
+      cn <- colnames(df_lookup)
+      chr_col   <- which(cn %in% c("seqnames","chr","chrom","Chromosome","V1"))[1] %||% 1
+      start_col <- which(cn %in% c("start","Start","V2"))[1] %||% 2
+      end_col   <- which(cn %in% c("end","End","V3"))[1] %||% 3
+    }
+    # choose gene column
+    if (!is.null(regions_gene_col) && regions_gene_col %in% colnames(df_lookup)) {
+      gcol <- regions_gene_col
+    } else {
+      candidates <- c("gene_id","gene","V10","V11","Gene","GeneID","gene_name","Name","name","symbol")
+      gcol <- intersect(candidates, colnames(df_lookup))
+      gcol <- if (length(gcol)) gcol[1] else NULL
+    }
+    if (is.null(gcol)) return(final_df)
+
+    look <- data.frame(
+      seqnames = as.character(df_lookup[[chr_col]]),
+      start    = as.numeric(df_lookup[[start_col]]),
+      end      = as.numeric(df_lookup[[end_col]]),
+      gene_id  = as.character(df_lookup[[gcol]]),
+      stringsAsFactors = FALSE
+    )
+    key_lookup <- paste(look$seqnames, look$start, look$end, sep=".")
+    key_final  <- paste(final_df$seqnames, final_df$start, final_df$end, sep=".")
+    final_df$gene_id <- look$gene_id[ match(key_final, key_lookup) ]
+
+    if (isTRUE(verbose_gene_map)) {
+      hit <- sum(!is.na(final_df$gene_id))
+      message(sprintf("    [gene_id] %s: attached %d/%d matches via regions lookup",
+                      as.character(region_tag), hit, nrow(final_df)))
+    }
+    final_df
+  }
+
+  .attach_gene_id_any <- function(final_df, gr_lookup, region_tag) {
+    if (!add_gene_id) return(final_df)
+    # 1) Try GRanges mcols
+    vals <- .guess_gene_id_from_gr(gr_lookup)
+    if (!is.null(vals)) {
+      df <- data.frame(
+        seqnames = as.character(GenomicRanges::seqnames(gr_lookup)),
+        start    = GenomicRanges::start(gr_lookup),
+        end      = GenomicRanges::end(gr_lookup),
+        gene_id  = as.character(vals),
+        stringsAsFactors = FALSE
+      )
+      key_lookup <- paste(df$seqnames, df$start, df$end, sep=".")
+      key_final  <- paste(final_df$seqnames, final_df$start, final_df$end, sep=".")
+      final_df$gene_id <- df$gene_id[ match(key_final, key_lookup) ]
+      if (isTRUE(verbose_gene_map)) {
+        hit <- sum(!is.na(final_df$gene_id))
+        message(sprintf("    [gene_id] %s: attached %d/%d matches from GRanges mcols",
+                        as.character(region_tag), hit, nrow(final_df)))
+      }
+      if (any(!is.na(final_df$gene_id))) return(final_df)
+      # else fall through to lookup table
+    }
+
+    # 2) Try explicit regions_lookup list
+    if (!is.null(regions_lookup) && !is.null(regions_lookup[[region_tag]])) {
+      return(.attach_gene_id_from_df(final_df, regions_lookup[[region_tag]], region_tag))
+    }
+
+    # 3) Try global 'regions' list if present
+    regions_global <- get0("regions", envir = .GlobalEnv, inherits = TRUE)
+    if (is.list(regions_global) && !is.null(regions_global[[region_tag]])) {
+      return(.attach_gene_id_from_df(final_df, regions_global[[region_tag]], region_tag))
+    }
+
+    if (isTRUE(verbose_gene_map)) {
+      message(sprintf("    [gene_id] %s: no suitable gene source found; leaving gene_id empty.", as.character(region_tag)))
+    }
+    final_df
+  }
+  # ---------- end helpers ----------
+
+  run_norm <- function(mod, fit, counts, region_tag, norm_type, gr_for_region = NULL) {
+    res_list <- list()
+    strains_all <- unique(metadata_df$Strain)
+    strains <- if (norm_type == "input") strains_all else setdiff(strains_all, reference_strain)
+
+    for (st in strains) {
+      chip_col <- paste0(st, ".", mod)
+      if (norm_type == "input") {
+        st_input_col <- paste0(st, ".input")
+        if (!(chip_col %in% colnames(design_mat)) || !(st_input_col %in% colnames(design_mat))) {
+          message("    Skipping ", st, " (missing ", chip_col, " or ", st_input_col, ")")
+          next
+        }
+        constr <- sprintf("`%s` - `%s`", chip_col, st_input_col)
+      } else {
+        st_input_col  <- paste0(st,               ".input")
+        ref_chip_col  <- paste0(reference_strain, ".", mod)
+        ref_input_col <- paste0(reference_strain, ".input")
+        needed <- c(chip_col, st_input_col, ref_chip_col, ref_input_col)
+        if (!all(needed %in% colnames(design_mat))) {
+          missing <- paste(setdiff(needed, colnames(design_mat)), collapse = ", ")
+          message("    Skipping ", st, " (missing: ", missing, ")")
+          next
+        }
+        # still compute the proper contrast for the RESULTS table
+        constr <- sprintf("`%s` - `%s` - (`%s` - `%s`)", chip_col, st_input_col, ref_chip_col, ref_input_col)
+      }
+
+      contrast <- limma::makeContrasts(contrasts = constr, levels = design_mat)
+      res <- edgeR::glmQLFTest(fit, contrast = contrast)
+
+      if (mode == "window") {
+        merged <- mergeResults(counts, res$table, tol = merge_tol, merge.args = list(max.width = merge_tol))
+        gr <- merged$regions
+        mcols(gr) <- S4Vectors::DataFrame(merged$combined)
+      } else {
+        gr <- if (!is.null(gr_for_region)) gr_for_region else rowRanges(counts)
+        m <- S4Vectors::mcols(gr)
+        m$logFC  <- res$table$logFC
+        m$PValue <- res$table$PValue
+        m$FDR    <- if ("FDR" %in% colnames(res$table)) res$table$FDR else p.adjust(res$table$PValue, method = "BH")
+        S4Vectors::mcols(gr) <- m
+      }
+      res_list[[st]] <- gr
+    }
+
+    if (length(res_list) == 0) return(NULL)
+
+    base <- res_list[[1]]
+    base_key_coords <- paste0(as.character(seqnames(base)), ".", start(base), ".", end(base))
+
+    # RESULTS (never filtered/masked)
+    final_df <- data.frame(
+      seqnames = as.character(GenomicRanges::seqnames(base)),
+      start    = GenomicRanges::start(base),
+      end      = GenomicRanges::end(base),
+      name     = rep(".", length(base)),
+      strand   = as.character(GenomicRanges::strand(base)),
+      stringsAsFactors = FALSE
+    )
+    for (st in names(res_list)) {
+      gr <- res_list[[st]]
+      mnames <- colnames(S4Vectors::mcols(gr))
+      lfc_col <- if ("rep.logFC" %in% mnames) "rep.logFC" else
+                 if ("logFC" %in% mnames) "logFC" else
+                 stop("Neither rep.logFC nor logFC found for ", st, " (", mod, ")")
+      final_df[[paste0("logFC_", st)]]  <- S4Vectors::mcols(gr)[[lfc_col]]
+      final_df[[paste0("PValue_", st)]] <- S4Vectors::mcols(gr)[["PValue"]]
+      final_df[[paste0("FDR_", st)]]    <- if ("FDR" %in% mnames) S4Vectors::mcols(gr)[["FDR"]] else
+        p.adjust(S4Vectors::mcols(gr)[["PValue"]], method = "BH")
+    }
+
+    # ---- NEW: attach gene_id for REGION mode by (chr,start,end) ----
+    if (identical(mode, "region") && isTRUE(add_gene_id)) {
+      final_df <- .attach_gene_id_any(final_df, gr_for_region, region_tag)
+    }
+
+    logfc_cols <- grep("^logFC_", colnames(final_df), value = TRUE)
+    logfc_cols <- order_cols_wt_first(logfc_cols, wt = reference_strain)
+    heatmap_df <- final_df[, logfc_cols, drop = FALSE]
+
+    ## --- NEW: de-duplicate coord rows before assigning rownames ---
+    dup <- duplicated(base_key_coords)
+    if (any(dup)) {
+      message("    [dedup] dropping ", sum(dup), " duplicated coord rows (",
+              length(base_key_coords), " -> ", sum(!dup), ")")
+      base_key_coords <- base_key_coords[!dup]
+      final_df  <- final_df[!dup, , drop = FALSE]
+      heatmap_df <- heatmap_df[!dup, , drop = FALSE]
+    }
+    ## --- END NEW ---
+    
+    rownames(heatmap_df) <- base_key_coords
+
+    if (mode == "window") {
+      if (norm_type == "input") {
+        # per-strain masking & keep rows with any positive/sig
+        for (st in sub("^logFC_", "", logfc_cols)) {
+          lcol <- paste0("logFC_",  st)
+          fcol <- paste0("FDR_",    st)
+          pcol <- paste0("PValue_", st)
+          mask <- (heatmap_df[[lcol]] <= 0)
+          if (!is.null(fdr_cutoff)    && fcol %in% colnames(final_df))  mask <- mask | (final_df[[fcol]] > fdr_cutoff)
+          if (!is.null(pvalue_cutoff) && pcol %in% colnames(final_df))  mask <- mask | (final_df[[pcol]] > pvalue_cutoff)
+          heatmap_df[[lcol]][mask] <- 0
+        }
+        keep_any <- rowSums(heatmap_df > 0, na.rm = TRUE) > 0
+        heatmap_df <- heatmap_df[keep_any, , drop = FALSE]
+
+        key <- paste(mod, region_tag, sep = "::")
+        keep_coords_env[[key]] <- rownames(heatmap_df)
+        vin_heatmap_env[[key]] <- heatmap_df  # store masked vInput for vWT derivation
+
+      } else {
+        # vWT derived from vInput: (strain - WT) row-wise using masked vInput values
+        key <- paste(mod, region_tag, sep = "::")
+        vin <- vin_heatmap_env[[key]]
+
+        if (is.null(vin)) {
+          warning("No stored vInput heatmap for ", key, "; falling back to contrast-based masking.")
+          kept_coords <- keep_coords_env[[key]]
+          keep_rows <- if (is.null(kept_coords)) rep(TRUE, nrow(heatmap_df)) else (rownames(heatmap_df) %in% kept_coords)
+          for (st in sub("^logFC_", "", logfc_cols)) {
+            lcol <- paste0("logFC_",  st)
+            fcol <- paste0("FDR_",    st)
+            pcol <- paste0("PValue_", st)
+            mask <- rep(FALSE, nrow(final_df))
+            if (!is.null(fdr_cutoff)    && fcol %in% colnames(final_df))  mask <- mask | (final_df[[fcol]] > fdr_cutoff)
+            if (!is.null(pvalue_cutoff) && pcol %in% colnames(final_df))  mask <- mask | (final_df[[pcol]] > pvalue_cutoff)
+            heatmap_df[[lcol]][mask] <- 0
+          }
+          heatmap_df <- heatmap_df[keep_rows, , drop = FALSE]
+        } else {
+          wt_col <- paste0("logFC_", reference_strain)
+          if (!(wt_col %in% colnames(vin))) {
+            warning("WT column (", wt_col, ") not found in vInput heatmap for ", key, "; cannot compute vWT from vInput.")
+            kept_coords <- keep_coords_env[[key]]
+            keep_rows <- if (is.null(kept_coords)) rep(TRUE, nrow(heatmap_df)) else (rownames(heatmap_df) %in% kept_coords)
+            heatmap_df <- heatmap_df[keep_rows, , drop = FALSE]
+          } else {
+            # make sure same row set & order as vInput
+            heatmap_df <- vin
+            # subtract WT row-wise, drop WT column
+            non_wt_cols <- setdiff(colnames(heatmap_df), wt_col)
+            if (length(non_wt_cols)) {
+              heatmap_df <- sweep(heatmap_df[, non_wt_cols, drop = FALSE], 1, vin[[wt_col]], FUN = "-")
+            } else {
+              heatmap_df <- heatmap_df[, 0, drop = FALSE]
+            }
+          }
+        }
+      }
+
+    } else {
+      # REGION MODE: optional masking only (heatmap df stays numeric-only; no gene_id here)
+      if (isTRUE(mask_region)) {
+        for (st in sub("^logFC_", "", logfc_cols)) {
+          lcol <- paste0("logFC_",  st)
+          fcol <- paste0("FDR_",    st)
+          pcol <- paste0("PValue_", st)
+          mask <- rep(FALSE, nrow(final_df))
+          if (!is.null(fdr_cutoff)    && fcol %in% colnames(final_df))  mask <- mask | (final_df[[fcol]] > fdr_cutoff)
+          if (!is.null(pvalue_cutoff) && pcol %in% colnames(final_df))  mask <- mask | (final_df[[pcol]] > pvalue_cutoff)
+          heatmap_df[[lcol]][mask] <- 0
+        }
+      }
+    }
+
+    list(results = final_df, heatmap = heatmap_df)
+  }
+
+  all_mods <- setdiff(unique(metadata_df$Antibody), "input")
+
+  if (mode == "region") {
+    if (is.null(out_obj$regions) || !length(out_obj$regions)) stop("No region sets found in out_obj$regions.")
+    for (nm in names(out_obj$regions)) {
+      rg <- out_obj$regions[[nm]]
+      fit    <- rg$fit
+      counts <- rg$counts
+      gr_in  <- if (!is.null(rg$gr)) rg$gr else rowRanges(counts)
+
+      message("=== Region set: ", nm, " ===")
+      for (mod in all_mods) {
+        if (identical(mod, "input")) next
+
+        # vInput
+        res_vin <- run_norm(mod, fit, counts, region_tag = nm, norm_type = "input", gr_for_region = gr_in)
+        if (!is.null(res_vin)) {
+          res_df <- res_vin$results
+          hm_df  <- res_vin$heatmap
+          res_name <- paste0(mod, "_Results_", nm, "_vInput")
+          hm_name  <- paste0(mod, "_Heatmap_", nm, "_vInput")
+          assign(res_name, res_df, envir = .GlobalEnv)
+          assign(hm_name,  hm_df,  envir = .GlobalEnv)
+          if (write_csv_results) write.csv(res_df, file.path(out_dir, paste0(res_name, ".csv")), row.names = FALSE)
+          if (write_csv_heatmap) write.csv(hm_df,  file.path(out_dir, paste0(hm_name,  ".csv")), row.names = TRUE)
+          if (write_igv) {
+            igv_file <- file.path(out_dir, paste0(mod, "_logFC_", nm, "_vInput.igv"))
+            .write_igv_from_heatmap(res_df, hm_df, igv_file)
+          }
+          message("  Modification: ", mod, "\n    -> Saved: ", res_name, " (and ", hm_name, ")")
+        }
+
+        # vWT (derived from vInput if available)
+        res_vref <- run_norm(mod, fit, counts, region_tag = nm, norm_type = "ref", gr_for_region = gr_in)
+        if (!is.null(res_vref)) {
+          res_df <- res_vref$results
+          hm_df  <- res_vref$heatmap
+          norm_tag <- paste0("v", reference_strain)
+          res_name <- paste0(mod, "_Results_", nm, "_", norm_tag)
+          hm_name  <- paste0(mod, "_Heatmap_", nm, "_", norm_tag)
+          assign(res_name, res_df, envir = .GlobalEnv)
+          assign(hm_name,  hm_df,  envir = .GlobalEnv)
+          if (write_csv_results) write.csv(res_df, file.path(out_dir, paste0(res_name, ".csv")), row.names = FALSE)
+          if (write_csv_heatmap) write.csv(hm_df,  file.path(out_dir, paste0(hm_name,  ".csv")), row.names = TRUE)
+          if (write_igv) {
+            igv_file <- file.path(out_dir, paste0(mod, "_logFC_", nm, "_", norm_tag, ".igv"))
+            .write_igv_from_heatmap(res_df, hm_df, igv_file)
+          }
+          message("    -> Saved: ", res_name, " (and ", hm_name, ")")
+        }
+      }
+    }
+  } else {
+    # WINDOW MODE
+    if (!is.null(out_obj$genomewide)) {
+      gw <- out_obj$genomewide
+      fit    <- gw$fit
+      counts <- gw$counts
+      nm <- "GenomeWide"
+      message("=== Window mode: ", nm, " ===")
+      for (mod in all_mods) {
+        if (identical(mod, "input")) next
+
+        # vInput
+        res_vin <- run_norm(mod, fit, counts, region_tag = nm, norm_type = "input", gr_for_region = NULL)
+        if (!is.null(res_vin)) {
+          res_df <- res_vin$results
+          hm_df  <- res_vin$heatmap
+          res_name <- paste0(mod, "_Results_", nm, "_vInput")
+          hm_name  <- paste0(mod, "_Heatmap_", nm, "_vInput")
+          assign(res_name, res_df, envir = .GlobalEnv)
+          assign(hm_name,  hm_df,  envir = .GlobalEnv)
+          if (write_csv_results) write.csv(res_df, file.path(out_dir, paste0(res_name, ".csv")), row.names = FALSE)
+          if (write_csv_heatmap) write.csv(hm_df,  file.path(out_dir, paste0(hm_name,  ".csv")), row.names = TRUE)
+          if (write_igv) {
+            igv_file <- file.path(out_dir, paste0(mod, "_logFC_", nm, "_vInput.igv"))
+            .write_igv_from_heatmap(res_df, hm_df, igv_file)
+          }
+          message("  Modification: ", mod, "\n    -> Saved: ", res_name, " (and ", hm_name, ")")
+        }
+
+        # vWT (derived from vInput)
+        res_vref <- run_norm(mod, fit, counts, region_tag = nm, norm_type = "ref", gr_for_region = NULL)
+        if (!is.null(res_vref)) {
+          res_df <- res_vref$results
+          hm_df  <- res_vref$heatmap
+          norm_tag <- paste0("v", reference_strain)
+          res_name <- paste0(mod, "_Results_", nm, "_", norm_tag)
+          hm_name  <- paste0(mod, "_Heatmap_", nm, "_", norm_tag)
+          assign(res_name, res_df, envir = .GlobalEnv)
+          assign(hm_name,  hm_df,  envir = .GlobalEnv)
+          if (write_csv_results) write.csv(res_df, file.path(out_dir, paste0(res_name, ".csv")), row.names = FALSE)
+          if (write_csv_heatmap) write.csv(hm_df,  file.path(out_dir, paste0(hm_name,  ".csv")), row.names = TRUE)
+          if (write_igv) {
+            igv_file <- file.path(out_dir, paste0(mod, "_logFC_", nm, "_", norm_tag, ".igv"))
+            .write_igv_from_heatmap(res_df, hm_df, igv_file)
+          }
+          message("    -> Saved: ", res_name, " (and ", hm_name, ")")
+        }
+      }
+    }
+
+    # genomewide filtered to regions (if present) — remains WINDOW logic (no gene_id attach)
+    if (!is.null(out_obj$regions) && length(out_obj$regions)) {
+      for (nm in names(out_obj$regions)) {
+        rg <- out_obj$regions[[nm]]
+        fit    <- rg$fit
+        counts <- rg$counts
+        message("=== Window mode (filtered to regions): ", nm, " ===")
+        for (mod in all_mods) {
+          if (identical(mod, "input")) next
+
+          # vInput
+          res_vin <- run_norm(mod, fit, counts, region_tag = nm, norm_type = "input", gr_for_region = NULL)
+          if (!is.null(res_vin)) {
+            res_df <- res_vin$results
+            hm_df  <- res_vin$heatmap
+            res_name <- paste0(mod, "_Results_", nm, "_vInput")
+            hm_name  <- paste0(mod, "_Heatmap_", nm, "_vInput")
+            assign(res_name, res_df, envir = .GlobalEnv)
+            assign(hm_name,  hm_df,  envir = .GlobalEnv)
+            if (write_csv_results) write.csv(res_df, file.path(out_dir, paste0(res_name, ".csv")), row.names = FALSE)
+            if (write_csv_heatmap) write.csv(hm_df,  file.path(out_dir, paste0(hm_name,  ".csv")), row.names = TRUE)
+            if (write_igv) {
+              igv_file <- file.path(out_dir, paste0(mod, "_logFC_", nm, "_vInput.igv"))
+              .write_igv_from_heatmap(res_df, hm_df, igv_file)
+            }
+            message("  Modification: ", mod, "\n    -> Saved: ", res_name, " (and ", hm_name, ")")
+          }
+
+          # vWT (derived from vInput)
+          res_vref <- run_norm(mod, fit, counts, region_tag = nm, norm_type = "ref", gr_for_region = NULL)
+          if (!is.null(res_vref)) {
+            res_df <- res_vref$results
+            hm_df  <- res_vref$heatmap
+            norm_tag <- paste0("v", reference_strain)
+            res_name <- paste0(mod, "_Results_", nm, "_", norm_tag)
+            hm_name  <- paste0(mod, "_Heatmap_", nm, "_", norm_tag)
+            assign(res_name, res_df, envir = .GlobalEnv)
+            assign(hm_name,  hm_df,  envir = .GlobalEnv)
+            if (write_csv_results) write.csv(res_df, file.path(out_dir, paste0(res_name, ".csv")), row.names = FALSE)
+            if (write_csv_heatmap) write.csv(hm_df,  file.path(out_dir, paste0(hm_name,  ".csv")), row.names = TRUE)
+            if (write_igv) {
+              igv_file <- file.path(out_dir, paste0(mod, "_logFC_", nm, "_", norm_tag, ".igv"))
+              .write_igv_from_heatmap(res_df, hm_df, igv_file)
+            }
+            message("    -> Saved: ", res_name, " (and ", hm_name, ")")
+          }
+        }
+      }
+    }
+  }
+}
+
+```
+
+#Analysis for window counts
+###########################################################################################
+```{r, run analysis function}
+
+csaw_analysis(
+  metadata_df = meta,
+  design_mat  = design.mat,
+  mode        = "window",             # "window" or "region"
+  out_obj     = count_results,        # <- REQUIRED so we have counts for merging/coords
+  reference_strain = "WT",
+  fdr_cutoff  = 0.05,
+  pvalue_cutoff = NULL, 
+  write_csv_results = FALSE,
+  write_csv_heatmap = FALSE,
+  write_igv   = FALSE,
+  mask_region = FALSE,
+  out_dir     = "TEST", #output dir, name whatever you want
+  merge_tol   = 300                   # only affects genome-wide window mode
+)
+
+```
+###########################################################################################
+
+#Making Heatmap comparing H3K27me3 profiles of CAF-1 and ASH-1 mutants
+###########################################################################################
+```{r, manual clustering for heatmap with ash-1 data, echo = FALSE}
+K27_FilteredHeatmap_mat <- as.matrix(H3K27me3_CS_Heatmap_GenomeWide_vInput)
+quantile(K27_FilteredHeatmap_mat, c(.01, .50, .75, .95, .98, .995)) 
+max <- quantile(K27_FilteredHeatmap_mat, 0.995) # identify the 98th percentile value and assign this to max
+K27_FilteredHeatmap_mat[K27_FilteredHeatmap_mat>max] = max    #replace any value larger than the 98th percentile value with the 98th
+
+#I want to subset the data frame to get rid of regions that aren't actually K27 enirched/depleted in any of the mutants. I will do this by eliminating regions that are < 0.1 in all both CAF-1 mutants and WT
+K27_FilteredHeatmap_mat <- subset(K27_FilteredHeatmap_mat, K27_FilteredHeatmap_mat[, 1] >= 0.101 | K27_FilteredHeatmap_mat[, 2] >= 0.101 | K27_FilteredHeatmap_mat[, 3] >= 0.101)
+
+#throwing our regions that are > 0.1 in set-7 (if any got through)
+K27_FilteredHeatmap_mat <- subset(K27_FilteredHeatmap_mat, K27_FilteredHeatmap_mat[, 5] <= 0.101)
+
+#I only want to look at CAF-1/rtt106 experiment
+K27_FilteredHeatmap_mat_ash1 <- K27_FilteredHeatmap_mat[,c(1:3,6)]
+
+#altering the subsetting to clean up heatmap
+no_cac <- subset(K27_FilteredHeatmap_mat, K27_FilteredHeatmap_mat[, 2] <= 0.1 & ! K27_FilteredHeatmap_mat[, 1] <= 0.1 & K27_FilteredHeatmap_mat[, 3] <= 0.1 )
+
+no_cac2 <- subset(K27_FilteredHeatmap_mat, ! K27_FilteredHeatmap_mat[, 2] <= 0.1 & ! K27_FilteredHeatmap_mat[, 1] <= 0.1 & K27_FilteredHeatmap_mat[, 3] <= 0.1 )
+
+no_cac1 <- subset(K27_FilteredHeatmap_mat, K27_FilteredHeatmap_mat[, 2] <= 0.1 & ! K27_FilteredHeatmap_mat[, 1] <= 0.1 & ! K27_FilteredHeatmap_mat[, 3] <= 0.1 )
+
+in_all <- subset(K27_FilteredHeatmap_mat, ! K27_FilteredHeatmap_mat[, 3] < 0.101 & ! K27_FilteredHeatmap_mat[, 2] < 0.101 & ! K27_FilteredHeatmap_mat[, 1] <= 0.1)
+
+no_WT <- subset(K27_FilteredHeatmap_mat, K27_FilteredHeatmap_mat[, 1] <= 0.1 & ! K27_FilteredHeatmap_mat[, 2] <= 0.1 & ! K27_FilteredHeatmap_mat[, 3] <= 0.1)
+
+cac1only <- subset(K27_FilteredHeatmap_mat, K27_FilteredHeatmap_mat[, 3] <= 0.1 & ! K27_FilteredHeatmap_mat[, 2] <= 0.1 & K27_FilteredHeatmap_mat[, 1] <= 0.101)
+
+cac2only <- subset(K27_FilteredHeatmap_mat, ! K27_FilteredHeatmap_mat[, 3] <= 0.1 & K27_FilteredHeatmap_mat[, 2] <= 0.1 & K27_FilteredHeatmap_mat[, 1] <= 0.101)
+
+#ordering the subsets so that enrichment is ordered from highest to lowest in each one
+no_cac_order <- order(rowMeans(no_cac[, c(1,6)]), decreasing = TRUE)
+no_cac2_order <- order(rowMeans(no_cac2[, c(1:2,6)]), decreasing = TRUE)
+no_cac1_order <- order(rowMeans(no_cac1[, c(1,3,6)]), decreasing = TRUE)
+in_all_order <- order(rowMeans(in_all[, c(1:3,6)]), decreasing = TRUE)
+no_WT_order <- order(rowMeans(no_WT[, c(2:3,6)]), decreasing = TRUE)
+cac1only_order <- order(rowMeans(cac1only[, 2&6]), decreasing = TRUE)
+cac2only_order <- order(rowMeans(cac2only[, 3&6]), decreasing = TRUE)
+
+#I now have to sort each new subset df separately based on enrichment in desired sample (WT or mutant), then I have to extract the original sorted # to properly sort them on the final heatmap. This is probably a backwards way to do this.
+no_cac_sort <- no_cac[no_cac_order, ]
+no_cac2_sort <- no_cac2[no_cac2_order, ]
+no_cac1_sort <- no_cac1[no_cac1_order, ]
+in_all_sort <- in_all[in_all_order, ]
+no_WT_sort <- no_WT[no_WT_order, ]
+cac1only_sort <- cac1only[cac1only_order, ]
+cac2only_sort <- cac2only[cac2only_order, ]
+
+#need rownames of each subset in order
+forheat1 <- rownames(no_cac_sort)
+forheat2 <- rownames(no_cac2_sort)
+forheat3 <- rownames(no_cac1_sort)
+forheat4 <- rownames(in_all_sort)
+forheat5 <- rownames(no_WT_sort)
+forheat6 <- rownames(cac1only_sort)
+forheat7 <- rownames(cac2only_sort)
+  
+finalorder <- c(forheat1, forheat2, forheat3, forheat4, forheat5, forheat6, forheat7)
+
+
+#setting color scale
+col_fun<- colorRamp2(c(0, max), c("white", "darkgreen"))
+col_fun(seq(0, max, length = 20))
+
+#Applying order to new variable in order to sort heatmap
+K27_FilteredHeatmap_mat_sort = K27_FilteredHeatmap_mat_ash1[finalorder, ]
+K27_map = as.data.frame(K27_FilteredHeatmap_mat_sort)
+```
+###########################################################################################
+
+#Counting over specific regions
+```{r, run count & fit function in region mode, echo = FALSE}
+
+#This is where you change the parameters and run the function
+count_results <- csaw_count_and_fit(
+  metadata_df = meta,
+  region_list = regions,
+  mode = "region", #"region" or "window"
+  window_size = 300,
+  design_mat = design.mat,
+  param = param
+)
+
+```
+
+#Analysis over specific regions
+```{r, run analysis function}
+
+csaw_analysis(
+  metadata_df = meta,
+  design_mat  = design.mat,
+  mode        = "region",             # "window" or "region"
+  out_obj     = count_results,        # <- REQUIRED so we have counts for merging/coords
+  reference_strain = "WT",
+  fdr_cutoff  = 0.05,
+  pvalue_cutoff = NULL, 
+  write_csv_results = TRUE,
+  write_csv_heatmap = FALSE,
+  write_igv   = FALSE,
+  mask_region = FALSE,
+  out_dir     = "TEST", #output dir, name whatever you want
+  merge_tol   = 300                   # only affects genome-wide window mode
+)
+
+```
+
+```{r, ChIP vs. RNA scatter plot code}
+#Use this to make scatterplots of ChIP-seq signal over genes vs. their RNA-seq expression values or another modifcation
+## Would probably only try to use with region mode
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+  library(stringr)
+  library(tibble)
+})
+
+# Flexible scatter: ChIP vs RNA  OR  ChIP vs ChIP
+# chip_vs_chip supports directional cutoffs (choose which sides count)
+chip_scatter_flex <- function(
+  mode = c("chip_vs_rna","chip_vs_chip"),
+
+  # --- inputs shared / aligned by gene id ---
+  gene_col       = "gene_id",
+
+  # X axis (ChIP set A)
+  chip_df_x,
+  strain_x,
+  chip_col_x     = NULL,
+
+  # Y axis
+  # mode="chip_vs_rna"
+  rna_df         = NULL,
+  rna_col        = "log2FoldChange",
+  # mode="chip_vs_chip"
+  chip_df_y      = NULL,
+  strain_y       = NULL,
+  chip_col_y     = NULL,
+
+  # --- coloring ---
+  # ChIP vs RNA: color by RNA magnitude
+  up_thresh      =  2,
+  down_thresh    = -2,
+  rna_colors_map = c(up = "red", down = "blue", ns = "gray50"),
+  rna_legend_title = "RNA log2FC group",
+
+  # ChIP vs ChIP: independent cutoffs per axis (directional)
+  chip_x_cutoff = 0.75,
+  chip_y_cutoff = 0.75,
+
+  # Which sides of each axis are considered “passing” the cutoff?
+  # Any subset of: "x_neg","x_pos","y_neg","y_pos".
+  # Defaults to all four (equivalent to absolute value on both axes).
+  chip_cut_use   = c("x_neg","x_pos","y_neg","y_pos"),
+
+  chip_cut_colors = c(both = "red", x_only = "#a65628", y_only = "#1f77b4", neither = "gray70"),
+  chip_cut_legend = "Cutoffs (X vs Y)",
+
+  # Optional guide lines (by default draw the same sides as chip_cut_use)
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # if NULL, uses chip_cut_use
+  guide_linetype     = "dotted",
+  guide_alpha        = 0.7,
+
+  # stats / fit
+  cor_method     = c("pearson","spearman"),
+  add_lm         = TRUE,
+  fit_global     = TRUE,
+  fit_color      = "black",
+  fit_linetype   = "dashed",
+  fit_se         = FALSE,
+
+  # aesthetics
+  point_alpha    = 0.75,
+  point_size     = 1.6,
+
+  # labels
+  xlab           = NULL,
+  ylab           = NULL,
+  title          = NULL,
+  chip_x_label   = NULL,
+  chip_y_label   = NULL,
+
+  # axes
+  xlim           = NULL,
+  ylim           = NULL,
+
+  # hygiene
+  drop_na        = TRUE,
+
+  # output
+  out_dir        = NULL,
+  file_prefix    = NULL,
+  save_formats   = c("pdf","png"),
+  width_in       = 12,
+  height_in      = 9,
+  dpi            = 600
+) {
+  `%||%` <- function(a,b) if (!is.null(a)) a else b
+  mode <- match.arg(mode)
+  cor_method <- match.arg(cor_method)
+
+  # helper: pick column
+  pick_chip_col <- function(df, strain) {
+    pref <- paste0("logFC_",  strain)
+    fall <- paste0("log2FC_", strain)
+    if (pref %in% names(df)) return(pref)
+    if (fall %in% names(df)) return(fall)
+    pats <- paste0("^log2?fc[._-]?", tolower(strain))
+    hits <- names(df)[str_detect(tolower(names(df)), pats)]
+    if (!length(hits)) stop("Could not find a ChIP column for strain '", strain, "'. Expected '", pref, "'.")
+    hits[1]
+  }
+
+  # X: ChIP A
+  stopifnot(gene_col %in% names(chip_df_x))
+  if (is.null(chip_col_x)) chip_col_x <- pick_chip_col(chip_df_x, strain_x)
+  stopifnot(chip_col_x %in% names(chip_df_x))
+  x_tbl <- chip_df_x %>%
+    transmute(GeneID = .data[[gene_col]], x = suppressWarnings(as.numeric(.data[[chip_col_x]])))
+
+  # Y
+  if (mode == "chip_vs_rna") {
+    if (is.null(rna_df)) stop("Provide rna_df for mode='chip_vs_rna'.")
+    if (is.null(rownames(rna_df))) stop("rna_df must have rownames as gene IDs.")
+    if (!rna_col %in% colnames(rna_df)) stop("rna_col '", rna_col, "' not found in rna_df.")
+    y_tbl <- rna_df %>%
+      as.data.frame() %>%
+      rownames_to_column("GeneID") %>%
+      transmute(GeneID, y = suppressWarnings(as.numeric(.data[[rna_col]])))
+  } else {
+    if (is.null(chip_df_y) || is.null(strain_y)) stop("Provide chip_df_y and strain_y for mode='chip_vs_chip'.")
+    stopifnot(gene_col %in% names(chip_df_y))
+    if (is.null(chip_col_y)) chip_col_y <- pick_chip_col(chip_df_y, strain_y)
+    stopifnot(chip_col_y %in% names(chip_df_y))
+    y_tbl <- chip_df_y %>%
+      transmute(GeneID = .data[[gene_col]], y = suppressWarnings(as.numeric(.data[[chip_col_y]])))
+  }
+
+  # align and clean
+  plot_df <- inner_join(x_tbl, y_tbl, by = "GeneID")
+  if (isTRUE(drop_na)) plot_df <- filter(plot_df, is.finite(x), is.finite(y))
+  if (nrow(plot_df) < 3) stop("Not enough overlapping genes with finite values to plot.")
+
+  # color grouping
+  if (mode == "chip_vs_rna") {
+    plot_df <- mutate(plot_df,
+      color_group = case_when(
+        y >  up_thresh   ~ "up",
+        y <  down_thresh ~ "down",
+        TRUE             ~ "ns"
+      )
+    )
+    col_vals <- setNames(as.character(rna_colors_map[c("up","down","ns")]), c("up","down","ns"))
+    legend_title <- rna_legend_title
+  } else {
+    # Directional passing logic based on chip_cut_use
+    cx <- abs(chip_x_cutoff); cy <- abs(chip_y_cutoff)
+    use <- unique(chip_cut_use)
+
+    pass_x <- rep(FALSE, nrow(plot_df))
+    if ("x_neg" %in% use) pass_x <- pass_x | (plot_df$x <= -cx)
+    if ("x_pos" %in% use) pass_x <- pass_x | (plot_df$x >=  cx)
+
+    pass_y <- rep(FALSE, nrow(plot_df))
+    if ("y_neg" %in% use) pass_y <- pass_y | (plot_df$y <= -cy)
+    if ("y_pos" %in% use) pass_y <- pass_y | (plot_df$y >=  cy)
+
+    plot_df <- mutate(plot_df,
+      pass_x = pass_x,
+      pass_y = pass_y,
+      color_group = case_when(
+        pass_x & pass_y ~ "both",
+        pass_x & !pass_y ~ "x_only",
+        !pass_x & pass_y ~ "y_only",
+        TRUE ~ "neither"
+      )
+    )
+    col_vals <- setNames(as.character(chip_cut_colors[c("both","x_only","y_only","neither")]),
+                         c("both","x_only","y_only","neither"))
+    legend_title <- chip_cut_legend
+  }
+
+  # stats
+  ct   <- suppressWarnings(cor.test(plot_df$x, plot_df$y, method = cor_method))
+  r2_s <- sprintf("%.2f", unname(ct$estimate)^2)
+  pval <- signif(ct$p.value, 3)
+
+  # labels & title
+  x_comp <- chip_x_label %||% paste0("ChIP (", strain_x, ")")
+  y_comp <- if (mode == "chip_vs_rna") "RNA" else (chip_y_label %||% paste0("ChIP (", strain_y, ")"))
+  if (is.null(xlab)) xlab <- paste0(x_comp, " log2FC")
+  if (is.null(ylab)) ylab <- paste0(y_comp, " log2FC")
+  if (is.null(title)) {
+    left  <- chip_x_label %||% paste0("ChIP-", strain_x)
+    right <- if (mode == "chip_vs_rna") "RNA" else (chip_y_label %||% paste0("ChIP-", strain_y))
+    title <- paste0(left, " vs ", right)
+  }
+
+  # annotation
+  xr <- range(plot_df$x, na.rm = TRUE); yr <- range(plot_df$y, na.rm = TRUE)
+  x_anno <- xr[1] + 0.02 * diff(xr); y_anno <- yr[2] - 0.05 * diff(yr)
+  anno_txt <- paste0("R² = ", r2_s, ", p = ", pval)
+
+  # plot
+  p <- ggplot(plot_df, aes(x, y, color = color_group)) +
+    geom_point(alpha = point_alpha, size = point_size) +
+    scale_color_manual(values = col_vals, name = legend_title) +
+    theme_minimal(base_size = 12) +
+    labs(x = xlab, y = ylab, title = title) +
+    annotate("text", x = x_anno, y = y_anno, label = anno_txt, hjust = 0, size = 4)
+
+  # cutoff guides (draw only selected sides; default = chip_cut_use)
+  if (mode == "chip_vs_chip" && isTRUE(show_cutoff_guides)) {
+    cx <- abs(chip_x_cutoff); cy <- abs(chip_y_cutoff)
+    sides <- unique(guide_sides %||% chip_cut_use)
+    if ("y_neg" %in% sides) p <- p + geom_hline(yintercept = -cy, linetype = guide_linetype, alpha = guide_alpha)
+    if ("y_pos" %in% sides) p <- p + geom_hline(yintercept =  cy, linetype = guide_linetype, alpha = guide_alpha)
+    if ("x_neg" %in% sides) p <- p + geom_vline(xintercept = -cx, linetype = guide_linetype, alpha = guide_alpha)
+    if ("x_pos" %in% sides) p <- p + geom_vline(xintercept =  cx, linetype = guide_linetype, alpha = guide_alpha)
+  }
+
+  # regression line (global by default)
+  if (isTRUE(add_lm) && isTRUE(fit_global)) {
+    p <- p + geom_smooth(
+      data = plot_df, aes(x, y),
+      method = "lm", se = fit_se,
+      color = fit_color, linetype = fit_linetype,
+      inherit.aes = FALSE
+    )
+  } else if (isTRUE(add_lm)) {
+    p <- p + geom_smooth(method = "lm", se = fit_se, linetype = fit_linetype)
+  }
+
+  if (!is.null(xlim) || !is.null(ylim)) p <- p + coord_cartesian(xlim = xlim, ylim = ylim, expand = TRUE)
+
+  # save
+  saved <- character(0)
+  if (!is.null(out_dir)) {
+    dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+    default_stem <- if (mode == "chip_vs_rna") {
+      paste0("chip", strain_x, "_vs_rna")
+    } else {
+      paste0("chip", strain_x, "_vs_chip", strain_y)
+    }
+    stem <- file_prefix %||% default_stem
+    fmts <- tolower(save_formats)
+    if ("pdf" %in% fmts) {
+      f <- file.path(out_dir, paste0(stem, ".pdf"))
+      ggsave(f, plot = p, width = width_in, height = height_in, units = "in", dpi = dpi)
+      saved <- c(saved, f)
+    }
+    if ("png" %in% fmts) {
+      f <- file.path(out_dir, paste0(stem, ".png"))
+      ggsave(f, plot = p, width = width_in, height = height_in, units = "in", dpi = dpi)
+      saved <- c(saved, f)
+    }
+  }
+
+  invisible(list(
+    data  = plot_df,
+    cor   = list(r = unname(ct$estimate), r2 = as.numeric(r2_s), p = ct$p.value, method = cor_method),
+    gg    = p,
+    saved = saved,
+    cols  = list(chip_col_x = chip_col_x, chip_col_y = chip_col_y, rna_col = rna_col, mode = mode)
+  ))
+}
+
+```
+
+```{r, use scatter plot function}
+#Reading in RNA dfs
+cac1RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac2RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac3RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+set7RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+ash1RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+cac1suz12RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+suz12RNA= read.csv("../CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__ALL_results_LFC.csv", row.names = 1)
+
+###Figure 2
+#K27 vs RNA cac-1
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = cac1_K27_scatter,   
+  strain_x    = "cac1",
+  rna_df      = cac1RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K27",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K27_vs_RNA_cac1_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+###Figure 4
+#genes actually enirched for Kac
+
+#Kac vs K27 cac-2
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = H3K27me3_CS_Results_K27promTSS_vWT,
+  strain_x      = "cac2",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac2",
+  chip_x_label  = "H3K27me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#4daf4a", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K27me3_vs_Kac_cac2_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#Kac vs RNA cac-2
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = Kac_Results_K27promTSSext_vWT,   
+  strain_x    = "cac2",
+  rna_df      = cac2RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "Kac",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "Kac_vs_RNA_cac2_K27_promTSSext",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+##Supplement
+#genes actually enirched for H3K36me3
+K36enrich = subset(H3K36me3_Results_K27promTSS_vInput, H3K36me3_Results_K27proms_vInput$logFC_WT > 0)
+K36scatter = subset(H3K36me3_Results_K27promTSS_vWT, H3K36me3_Results_K27proms_vWT$gene_id %in% K36enrich$gene_id)
+
+#K36 vs RNA
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = K36scatter,   
+  strain_x    = "cac1",
+  rna_df      = cac1RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K36",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K36_vs_RNA_cac1_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = K36scatter,   
+  strain_x    = "cac2",
+  rna_df      = cac2RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K36",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K36_vs_RNA_cac2_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = K36scatter,   
+  strain_x    = "set7",
+  rna_df      = set7RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K36",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K36_vs_RNA_set7_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#K36 vs Kac
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = K36scatter,
+  strain_x      = "cac1",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac1",
+  chip_x_label  = "H3K36me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#a65628", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K36me3_vs_Kac_cac1_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = K36scatter,
+  strain_x      = "cac2",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac2",
+  chip_x_label  = "H3K36me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#a65628", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K36me3_vs_Kac_cac2_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = K36scatter,
+  strain_x      = "set7",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "set7",
+  chip_x_label  = "H3K36me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#a65628", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K36me3_vs_Kac_set7_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#other Kac vs RNA
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = Kac_Results_K27promTSSext_vWT,   
+  strain_x    = "set7",
+  rna_df      = set7RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "Kac",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "Kac_vs_RNA_set7_K27_promTSSext",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = Kac_Results_K27promTSSext_vWT,   
+  strain_x    = "cac1",
+  rna_df      = cac1RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "Kac",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "Kac_vs_RNA_cac1_K27_promTSSext",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#other K27 vs RNA
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = H3K27me3_CS_Results_K27promTSS_vWT,   
+  strain_x    = "cac2",
+  rna_df      = cac2RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K27",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K27_vs_RNA_cac2_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = H3K27me3_CS_Results_K27promTSS_vWT,   
+  strain_x    = "cac3",
+  rna_df      = cac3RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K27",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K27_vs_RNA_cac3_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = H3K27me3_CS_Results_K27promTSS_vWT,   
+  strain_x    = "ash1",
+  rna_df      = ash1RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K27",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K27_vs_RNA_ash1_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#cac1 Kac vs K27
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = H3K27me3_CS_Results_K27promTSS_vWT,
+  strain_x      = "cac1",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac1",
+  chip_x_label  = "H3K27me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#4daf4a", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K27me3_vs_Kac_cac1_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#Figure 6 supplement (Double Mutant)
+
+#K36, Kac vs RNA
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = K36scatter,   
+  strain_x    = "cac1_suz12",
+  rna_df      = cac1suz12RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K36",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K36_vs_RNA_cac1_suz12_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = Kac_Results_K27promTSSext_vWT,   
+  strain_x    = "cac1_suz12",
+  rna_df      = cac1suz12RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K36",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "Kac_vs_RNA_cac1_suz12_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#K36 vs Kac
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = K36scatter,
+  strain_x      = "cac1_suz12",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac1_suz12",
+  chip_x_label  = "H3K36me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#a65628", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K36me3_vs_Kac_cac1_suz12_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#########
+#cac-3 plots
+
+#RNA
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = Kac_Results_K27promTSSext_vWT,   
+  strain_x    = "cac3",
+  rna_df      = cac3RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "Kac",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "Kac_vs_RNA_cac3_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+out <- chip_scatter_flex(
+  mode        = "chip_vs_rna",
+  chip_df_x   = K36scatter,   
+  strain_x    = "cac3",
+  rna_df      = cac3RNA,                          # RNA df
+  up_thresh      =  1,
+  down_thresh    = -1,
+  chip_x_label = "K36",                      # label in axes/title
+  out_dir     = "scatter_outputs",
+  file_prefix = "K36_vs_RNA_cac3_K27_promTSS",
+  width_in    = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#Kac vs K27 cac-3
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = H3K27me3_CS_Results_K27promTSS_vWT,
+  strain_x      = "cac3",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac3",
+  chip_x_label  = "H3K27me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#4daf4a", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K27me3_vs_Kac_cac3_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+#K36 vs Kac cac-3
+out <- chip_scatter_flex(
+  mode          = "chip_vs_chip",
+  chip_df_x     = K36scatter,
+  strain_x      = "cac3",
+  chip_df_y     = Kac_Results_K27promTSSext_vWT,
+  strain_y      = "cac3",
+  chip_x_label  = "H3K36me3",
+  chip_y_label  = "Kac",
+  chip_x_cutoff   = 0.75,
+  chip_y_cutoff   = 0.585,
+  chip_cut_use     = c("x_neg","y_pos"),
+  chip_cut_colors  = c(both = "red", x_only = "#a65628", y_only = "#cab2d6", neither = "gray70"),
+  show_cutoff_guides = TRUE,
+  guide_sides        = NULL,   # NULL => uses chip_cut_use
+  out_dir       = "scatter_outputs",
+  file_prefix   = "H3K36me3_vs_Kac_cac3_promTSS",
+  width_in      = 12, height_in = 9, dpi = 600
+)
+out$gg
+
+
+#View what your plotting
+View(out$data)  
+```
+
+```{r, Processing Dataframes}
+#Subsetting Genes for enrichment of all histone mods
+##using different regions for each mod
+
+#First loading in RNA-seq dfs needed
+
+#determining genes enriched for H3K36me3 in WT (log2FC > 1 over input)
+K36_enriched_genes <- H3K36me3_Results_allgenes_vInput %>%
+  filter(if_any(all_of(c(6)), ~ coalesce(.x > 0, FALSE)))
+
+#determining genes enriched for H3K27me3 in WT (log2FC > 1 over input)
+##mainly using to determine genes that gain H3K27me3 outside Facultative heterochromatin
+K27_enriched_genes <- H3K27me3_CS_Results_allgenespromTSS_vInput %>%
+  filter(if_any(all_of(c(6, 9, 12, 15, 21)), ~ coalesce(.x > 1, FALSE)))
+
+#determining genes enriched for Kac in WT (log2FC > 1 over input)
+Kac_enriched <- Kac_Results_K27promTSSext_vInput %>%
+  filter(if_any(all_of(c(6, 9, 12, 18, 21, 24, 27)), ~ coalesce(.x > 0, FALSE)))
+
+#determining genes enriched for H3K4me2 in WT (log2FC > 1 over input)
+K4_enriched <- H3K4me2_Results_K27genes_vInput %>%
+  filter(if_any(all_of(c(6, 9, 12, 18, 21, 24, 27)), ~ coalesce(.x > 0, FALSE)))
+
+###Figure 2
+#Genes that gain ectopic H3K27me3 in mutant strains
+
+##cac-1
+cac1_ectopic_K27 = subset (K27_enriched_genes, K27_enriched_genes$logFC_cac1 > 1 & K27_enriched_genes$logFC_WT < 1 & ! K27_enriched_genes$gene_id %in% regions$K27genes$V10 )
+cac1_ectopic_K27_code = subset(cac1_ectopic_K27, cac1_ectopic_K27$gene_id %in% rownames(cac1RNA))
+
+###determine which are downregulated
+cac1_ectopic_RNA = subset(cac1RNA, rownames(cac1RNA) %in% cac1_ectopic_K27_code$gene_id)
+cac1_ectopic_RNA_down = subset(cac1_ectopic_RNA, cac1_ectopic_RNA$log2FoldChange <= -1 & cac1_ectopic_RNA$padj < 0.05)
+
+###for scatter plot
+cac1_K27_scatter = subset(H3K27me3_CS_Results_allgenespromTSS_vWT, H3K27me3_CS_Results_allgenespromTSS_vWT$gene_id %in% H3K27me3_CS_Results_K27genes_vWT$gene_id | H3K27me3_CS_Results_allgenespromTSS_vWT$gene_id %in% cac1_ectopic_K27_code$gene_id)
+
+##isolate genes of interest
+CAF1_K36_lost = subset(H3K36me3_Results_K27promTSS_vWT, H3K36me3_Results_K27promTSS_vWT$logFC_cac1 < -0.75 | H3K36me3_Results_K27promTSS_vWT$logFC_cac2 < -0.75)
+
+set7_K36_lost = subset(H3K36me3_Results_K27promTSS_vWT, H3K36me3_Results_K27promTSS_vWT$logFC_set7 < -0.75)
+
+##subset the bed
+K36_lost_bed = subset(regions$K27genes, regions$K27genes$gene_id %in% CAF1_K36_lost$gene_id)
+K36_not_lost_bed = subset(regions$K27genes, ! regions$K27genes$gene_id %in% K36_lost_bed$gene_id)
+
+write.table(K36_lost_bed, file = "CAF-1_H3K36me3_lost_K27_genes.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K36_not_lost_bed, file = "CAF-1_H3K36me3_not_lost_K27_genes.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+##############################
+#H3K36me3_Results_allgenes_vInput = read.table("./CAF-1_Full_genome_Analysis/H3K36me3_Results_K27promTSS_vInput.csv", sep = ",", header = TRUE)
+
+###Figure 3
+
+#ash-1 methylated genes
+H3K36me3_no_ash1 = subset(K36_enriched_genes, K36_enriched_genes$logFC_ash1 < -0.585)
+
+#ash-1 methylated, non-K27
+H3K36me3_no_ash1_nonK27 = subset(H3K36me3_no_ash1, ! H3K36me3_no_ash1$gene_id %in% regions$K27genes$gene_id)
+
+#ash-1 methylated, non-K27, lost in CAF (going over TSS)
+
+#Not ash-1 methylated
+H3K36me3_set2_meth <- subset(K36_enriched_genes, ! K36_enriched_genes$gene_id %in% H3K36me3_no_ash1$gene_id & ! K36_enriched_genes$gene_id %in% regions$K27genes$gene_id)
+
+###Make beds
+H3K36me3_no_ash1_nonK27_bed = subset(regions$K27genes, regions$K27genes$V10 %in% H3K36me3_no_ash1_nonK27$gene_id)
+
+H3K36me3_set2_meth_bed <- subset(regions$K27genes, regions$K27genes$V10 %in% H3K36me3_set2_meth$gene_id)
+
+#write files
+write.table(H3K36me3_no_ash1_nonK27_bed, file = "ash1_meth_nonK27_V2.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+write.table(H3K36me3_set2_meth_bed, file = "set2_meth_only_V2.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+##################################
+###K27
+####i want to subset genes that lose K27 or K36 in cac-1 or cac-2
+K27lost = subset(H3K27me3_CS_Results_K27promTSS_vWT, H3K27me3_CS_Results_K27promTSS_vWT$logFC_cac1 < -0.75 | H3K27me3_CS_Results_K27promTSS_vWT$logFC_cac2 < -0.75)
+K27lostash1 = subset(H3K27me3_CS_Results_K27promTSS_vWT, H3K27me3_CS_Results_K27promTSS_vWT$logFC_ash1 < -0.75)
+#K27lost = subset(K27lost, K27lost$FDR_cac1 < 0.05 | K27lost$FDR_cac2 < 0.05)
+K27lost = subset(regions$K27genes, regions$K27genes$gene_id %in% K27lost$gene_id)
+K27lostash1 = subset(regions$K27genes, regions$K27genes$gene_id %in% K27lostash1$gene_id)
+
+#only coding genes (i.e. no tRNA or rRNA genes)
+K27lost_code = subset(K27lost, K27lost$gene_id %in% rownames(allDataTPM))
+K27lost_nocode = subset(K27lost, ! K27lost$gene_id %in% rownames(allDataTPM))
+
+#only K36 genes
+K27lostK36enriched = H3K36me3_Results_K27promTSS_vInput %>%
+  filter(if_any(all_of(c(6, 9, 12, 15, 18, 24)), ~ coalesce(.x > 0, FALSE)))
+K27lostK36enrichedvWT = subset(H3K36me3_Results_K27promTSS_vWT, H3K36me3_Results_K27promTSS_vWT$gene_id %in% K27lostK36enriched$gene_id)
+
+K36lost = subset(K27lostK36enrichedvWT, K27lostK36enrichedvWT$logFC_cac1 < -0.75 | K27lostK36enrichedvWT$logFC_cac2 < -0.75)
+
+K36lost_set7 = subset(K27lostK36enrichedvWT, K27lostK36enrichedvWT$logFC_set7 < -0.75)
+
+K36lost_double_only = subset(K27lostK36enrichedvWT, K27lostK36enrichedvWT$logFC_cac1_suz12 < -0.75 & ! K27lostK36enrichedvWT$gene_id %in% K36lost$gene_id)
+
+K36_Retain_double = subset(K27lostK36enrichedvWT, ! K27lostK36enrichedvWT$gene_id %in% K36lost$gene_id & ! K27lostK36enrichedvWT$gene_id %in% K36lost_double_only$gene_id)
+
+K36lost_CAF_ALL = subset(H3K36me3_Results_allgenes_vWT, H3K36me3_Results_allgenes_vWT$logFC_cac1 < -0.75 | H3K36me3_Results_allgenes_vWT$logFC_cac2 < -0.75)
+K36lost_CAF_nonK27 = subset(K36lost_CAF_ALL, ! K36lost_CAF_ALL$gene_id %in% K36lost$gene_id)
+
+#K36lost = subset(K36lost, K36lost$FDR_cac1 < 0.05 | K36lost$FDR_cac2 < 0.05)
+K36lost = subset(regions$K27genes, regions$K27genes$gene_id %in% K36lost$gene_id)
+
+K36lost_cac1suz12 = subset(regions$K27genes, regions$K27genes$gene_id %in% K36lost_double_only$gene_id)
+
+K36retain_double = subset(regions$K27genes, regions$K27genes$gene_id %in% K36_Retain_double$gene_id)
+
+K36lost_code = subset(K36lost, K36lost$gene_id %in% rownames(allDataTPM))
+K36lost_nocode = subset(K36lost, ! K36lost$gene_id %in% rownames(allDataTPM))
+
+retainK27 = subset(regions$K27genes, ! regions$K27genes$gene_id %in% K27lost$gene_id)
+retainK36 = subset(regions$K27genes, regions$K27genes$gene_id %in% K27lostK36enriched$gene_id & ! regions$K27genes$gene_id %in% K36lost$gene_id)
+K36_enriched = subset(regions$K27genes, regions$K27genes$gene_id %in% K27lostK36enriched$gene_id)
+K36_unerniched = subset(regions$K27genes, ! regions$K27genes$gene_id %in% K27lostK36enriched$gene_id)
+                      
+write.table(K27lost, file = "CAF-1_K27lost.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K36lost, file = "CAF-1_K36lost.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K36lost_cac1suz12, file = "cac1suz12_K36lost.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K36retain_double, file = "double_K36_retain.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K36_enriched, file = "K27genes_K36enriched.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE) 
+write.table(K36_unerniched, file = "K27genes_K36unenriched.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE) 
+
+write.table(retainK27, file = "CAF-1_K27retain.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(retainK36, file = "CAF-1_K36retain.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE) 
+
+#######################
+K27lost_only = subset(K27lost, ! K27lost$gene_id %in% K36lost$gene_id)
+K27_K36retain = subset(regions$K27genes, ! regions$K27genes$gene_id %in% K36lost$gene_id & ! regions$K27genes$gene_id %in% K27lost$gene_id)
+
+write.table(K27lost_only, file = "CAF1_K27_lost_only.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K27_K36retain, file = "CAF1_K36_K27_retain.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+#########################################
+###Figure 3 supplement
+##K36 clustering at non-K27 ash-1 genes
+ash1_depvWT = subset(H3K36me3_Results_allgenes_promTSSext_vWT, H3K36me3_Results_allgenes_promTSSext_vWT$gene_id %in% H3K36me3_no_ash1_nonK27$gene_id)
+
+ash1_dep_CAF_lost = subset(ash1_depvWT, ash1_depvWT$logFC_cac1 < -0.75 | ash1_depvWT$logFC_cac2 < -0.75)
+ash1_dep_CAF_Retain = subset(ash1_depvWT, ! ash1_depvWT$gene_id %in% ash1_dep_CAF_lost$gene_id )
+
+ash1_dep_CAF_lost_bed = subset(regions$allgenes, regions$allgenes$gene_id %in% ash1_dep_CAF_lost$gene_id)
+ash1_dep_CAF_Retain_bed = subset(regions$allgenes, regions$allgenes$gene_id %in% ash1_dep_CAF_Retain$gene_id)
+
+write.table(ash1_dep_CAF_lost_bed, file = "ash1_dep_CAF_lost.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(ash1_dep_CAF_Retain_bed, file = "ash1_dep_CAF_Retain.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+#################
+#Gain in active mods
+
+#non-K4 enriched genes
+K4no = subset(H3K4me2_Results_K27genes_vInput, ! H3K4me2_Results_K27genes_vInput$gene_id %in% K4_enriched$gene_id)
+
+#K4_enricheddub <- H3K4me2_Results_K27genes_vInput %>%
+ # filter(if_any(all_of(c(6, 9, 12, 18, 21, 24, 27)), ~ coalesce(.x > 0, FALSE)))
+
+
+Kac_enrichedvWT = subset(Kac_Results_K27promTSSext_vWT, Kac_Results_K27promTSSext_vWT$gene_id %in% Kac_enriched$gene_id)
+K4_enrichedvWT = subset(H3K4me2_Results_K27genes_vWT, H3K4me2_Results_K27genes_vWT$gene_id %in% K4_enriched$gene_id)
+#Kac_enrichedvWTdub = subset(Kac_Results_K27promTSSext_vWT, Kac_Results_K27promTSSext_vWT$gene_id %in% Kac_enricheddub$gene_id)
+#K4_enrichedvWTdub = subset(H3K4me2_Results_K27genes_vWT, H3K4me2_Results_K27genes_vWT$gene_id %in% K4_enricheddub$gene_id)
+
+#########################
+#Now subsetting for changes
+
+###Figure 4
+##Kac
+Kac_prom_gain_CAF = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_cac1 > 0.585 | Kac_enrichedvWT$logFC_cac2 > 0.585)
+Kac_prom_gain_set7 = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_set7 > 0.585)
+Kac_prom_NO_gain_set7 = subset(Kac_enrichedvWT, ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_set7$gene_id)
+Kac_prom_gain_set7_noCAF = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_set7 > 0.585 & ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_CAF$gene_id)
+Kac_enriched_nochange = subset(Kac_enrichedvWT, ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_CAF$gene_id & ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_set7$gene_id)
+Kac_prom_gain_cac2 = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_cac2 > 0.585)
+
+Kac_Gain_CAF = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_CAF$gene_id)
+Kac_Gain_set7 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_set7$gene_id)
+Kac_NO_Gain_set7 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_NO_gain_set7$gene_id)
+Kac_Gain_set7_noCAF = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_set7_noCAF$gene_id)
+Kac_no_change = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_enriched_nochange$gene_id)
+Kac_Gain_cac2 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_cac2$gene_id)
+
+write.table(Kac_Gain_CAF, file = "Kac_Gain_CAF.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_set7, file = "Kac_Gain_set7.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_NO_Gain_set7, file = "Kac_NO_Gain_set7.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_set7_noCAF, file = "Kac_Gain_set7_noCAF.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_no_change, file = "Kac_no_change.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_cac2, file = "Kac_Gain_cac2.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+##K4
+K4_genes_gain_CAF = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_cac1 > 0.75 | K4_enrichedvWT$logFC_cac2 > 0.75)
+K4_genes_gain_set7 = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_set7 > 0.75)
+K4_genes_gain_set7_noCAF = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_set7 > 0.75 & ! K4_enrichedvWT$gene_id %in% K4_genes_gain_CAF$gene_id)
+K4_genes_gain_cac2 = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_cac2 > 0.75)
+K4_nochange = subset(K4_enrichedvWT, ! K4_enrichedvWT$gene_id %in% K4_genes_gain_CAF$gene_id & ! K4_enrichedvWT$gene_id %in% K4_genes_gain_set7$gene_id)
+
+K4_Gain_CAF = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_CAF$gene_id)
+K4_Gain_cac2 = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_cac2$gene_id)
+K4_Gain_set7 = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_set7$gene_id)
+K4_Gain_set7_noCAF = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_set7_noCAF$gene_id)
+K4_no_change = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_nochange$gene_id)
+
+write.table(K4_Gain_CAF, file = "K4_Gain_CAF.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_set7, file = "K4_Gain_set7.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_set7_noCAF, file = "K4_Gain_set7_noCAF.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_cac2, file = "K4_Gain_cac2.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_no_change, file = "K4_no_change.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+###Figure 6
+#Kac
+Kac_prom_gain_cac1 = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_cac1 > 0.585)
+#Kac_prom_gain_suz12 = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_suz12 > 0.585)
+#Kac_cac1_suz12_gain = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_cac1_suz12 > 0.585)
+#Kac_prom_gain_suz12_noCAF = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_suz12 > 0.585 & ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_CAF$gene_id)
+#
+Kac_prom_gain_suz12_nocac1 = subset(Kac_enrichedvWT, Kac_enrichedvWT$logFC_suz12 > 0.585 & ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_cac1$gene_id)
+#
+Kac_enriched_nochange_dub = subset(Kac_enrichedvWT, ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_cac1$gene_id & ! Kac_enrichedvWT$gene_id %in% Kac_prom_gain_suz12_nocac1$gene_id)
+#
+Kac_uneriched = subset(Kac_Results_K27promTSSext_vWT, ! Kac_Results_K27promTSSext_vWT$gene_id %in% Kac_enriched$gene_id)
+#
+Kac_cac1_suz12_gain_only = subset(Kac_enriched_nochange_dub, Kac_enriched_nochange_dub$logFC_cac1_suz12 > 0.585)
+#Remake no change
+Kac_enriched_nochange_dub = subset(Kac_enriched_nochange_dub, ! Kac_enriched_nochange_dub$gene_id %in% Kac_cac1_suz12_gain_only$gene_id)
+
+Kac_Gain_suz12 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_suz12$gene_id)
+Kac_Gain_suz12_noCAF = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_suz12_noCAF$gene_id)
+#
+Kac_Gain_suz12_nocac1 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_suz12_nocac1$gene_id)
+#
+Kac_Gain_cac1_suz12 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_cac1_suz12_gain$gene_id)
+Kac_unerich = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_uneriched$gene_id)
+Kac_Gain_cac1 = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_prom_gain_cac1$gene_id)
+Kac_Gain_cac1_suz12_only = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_cac1_suz12_gain_only$gene_id)
+Kac_no_change_dub = subset(regions$K27genes, regions$K27genes$gene_id %in% Kac_enriched_nochange_dub$gene_id)
+
+write.table(Kac_Gain_cac1, file = "Kac_Gain_cac1.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_suz12, file = "Kac_Gain_suz12.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_cac1_suz12, file = "Kac_Gain_cac1_suz12.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_suz12_noCAF, file = "Kac_Gain_suz12_noCAF.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_suz12_nocac1, file = "Kac_Gain_suz12_no_cac1.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_unerich, file = "Kac_unenriched.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_Gain_cac1_suz12_only, file = "Kac_Gain_cac1-suz12_only.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(Kac_no_change_dub, file = "Kac_no_change_dub.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+#K4
+K4_genes_gain_suz12 = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_suz12 > 0.75)
+K4_cac1_suz12_gain = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_cac1_suz12 > 0.75)
+#
+K4_genes_gain_suz12_noCAF = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_suz12 > 0.75 & ! K4_enrichedvWT$gene_id %in% K4_genes_gain_CAF$gene_id)
+#
+K4_unenriched = subset(H3K4me2_Results_K27genes_vWT, ! H3K4me2_Results_K27genes_vWT$gene_id %in% K4_enrichedvWT$gene_id)
+#
+K4_genes_gain_cac1 = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_cac1 > 0.75)
+#
+K4_genes_gain_suz12_nocac1 = subset(K4_enrichedvWT, K4_enrichedvWT$logFC_suz12 > 0.75 & ! K4_enrichedvWT$gene_id %in% K4_genes_gain_cac1$gene_id)
+#
+K4_nochange_dub = subset(K4_enrichedvWT, ! K4_enrichedvWT$gene_id %in% K4_genes_gain_cac1$gene_id & ! K4_enrichedvWT$gene_id %in% K4_genes_gain_suz12$gene_id)
+#
+#K4_cac1_suz12_gain_only = subset(K4_nochange, K4_nochange$logFC_cac1_suz12 > 0.75)
+
+K4_Gain_cac1 = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_cac1$gene_id)
+K4_Gain_suz12 = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_suz12$gene_id)
+K4_Gain_cac1_suz12 = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_cac1_suz12_gain$gene_id)
+K4_Gain_suz12_noCAF = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_suz12_noCAF$gene_id)
+K4_Gain_suz12_nocac1 = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_genes_gain_suz12_nocac1$gene_id)
+K4_no_change_dub = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_nochange_dub$gene_id)
+K4_unenrich = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_unenriched$gene_id)
+#K4_Gain_cac1_suz12_only = subset(regions$K27genes, regions$K27genes$gene_id %in% K4_cac1_suz12_gain_only$gene_id)
+
+write.table(K4_Gain_suz12, file = "K4_Gain_suz12.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_cac1_suz12, file = "K4_Gain_cac1_suz12.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_suz12_noCAF, file = "K4_Gain_suz12_noCAF.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_suz12_nocac1, file = "K4_Gain_suz12_no_cac1.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_no_change_dub, file = "K4_no_change_dub.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_unenrich, file = "K4_unenriched.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(K4_Gain_cac1, file = "K4_Gain_cac1.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+#write.table(K4_Gain_cac1_suz12_only, file = "K4_Gain_cac1-suz12_only.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+#############################################
+#Gains only within genes that lose K27 or K36
+Kac_CAF1_Gain_K27K36lostgenes = subset(CAF_K27_K36_Lost, CAF_K27_K36_Lost$gene_id %in% Kac_genesprom_gain_CAF$gene_id)
+K4_CAF1_Gain_K27K36lostgenes = subset(CAF_K27_K36_Lost, CAF_K27_K36_Lost$gene_id %in% K4_genes_gain_CAF$gene_id)
+Kac_CAF1_Gain_K27lostgenes = subset(K27lost, K27lost$gene_id %in% Kac_genesprom_gain_CAF$gene_id)
+K4_CAF1_Gain_K27lostgenes = subset(K27lost, K27lost$gene_id %in% K4_genes_gain_CAF$gene_id)
+
+Kac_set7_Gain_K27K36lostgenes = subset(CAF_K27_K36_Lost, CAF_K27_K36_Lost$gene_id %in% Kac_genesprom_gain_set7$gene_id)
+K4_set7_Gain_K27K36lostgenes = subset(CAF_K27_K36_Lost, CAF_K27_K36_Lost$gene_id %in% K4_genes_gain_set7$gene_id)
+Kac_set7_Gain_K27lostgenes = subset(K27lost, K27lost$gene_id %in% Kac_genesprom_gain_set7$gene_id)
+K4_set7_Gain_K27lostgenes = subset(K27lost, K27lost$gene_id %in% K4_genes_gain_set7$gene_id)
+  
+Kac_set7_Gain_K27K36lostgenes_noCAF = subset(CAF_K27_K36_Lost, CAF_K27_K36_Lost$gene_id %in% Kac_genesprom_gain_set7$gene_id & ! CAF_K27_K36_Lost$gene_id %in% Kac_genesprom_gain_CAF$gene_id)
+K4_set7_Gain_K27K36lostgenes_noCAF =  subset(CAF_K27_K36_Lost, CAF_K27_K36_Lost$gene_id %in% K4_genes_gain_set7$gene_id & ! CAF_K27_K36_Lost$gene_id %in% K4_genes_gain_CAF$gene_id)
+
+#################
+#Combine dfs and remove duplicate rows (for Venn Diagram figs.)
+Kac_K4_set7_Gain <- bind_rows(
+  mutate(Kac_prom_gain_set7, .source = "Kac_prom_gain_set7"),
+  mutate(K4_genes_gain_set7, .source = "K4_genes_gain_set7")
+) %>%
+  # if you want cac1UP to win on collisions, keep this order
+  distinct(gene_id, .keep_all = TRUE) %>%
+  select(-.source)
+
+Kac_K4_CAF_Gain <- bind_rows(
+  mutate(Kac_prom_gain_CAF, .source = "Kac_prom_gain_CAF"),
+  mutate(K4_genes_gain_CAF, .source = "K4_genes_gain_CAF")
+) %>%
+  # if you want cac1UP to win on collisions, keep this order
+  distinct(gene_id, .keep_all = TRUE) %>%
+  select(-.source)
+
+cacupcombinek27 <- bind_rows(
+  mutate(cac1_K27, .source = "cac1_K27"),
+  mutate(cac2_K27, .source = "cac2_K27")
+) %>%
+  # if you want cac1UP to win on collisions, keep this order
+  distinct(Attributes, .keep_all = TRUE) %>%
+  select(-.source)
+
+Kac_K4_set7_Gain_code = subset(Kac_K4_set7_Gain, Kac_K4_set7_Gain$gene_id %in% rownames(allDataTPM))
+Kac_K4_CAF_Gain_code = subset(Kac_K4_CAF_Gain, Kac_K4_CAF_Gain$gene_id %in% rownames(allDataTPM))
+
+Kac_K4_cac1_Gain = subset(Kac_K4_CAF_Gain, Kac_K4_CAF_Gain$gene_id %in% K4_Gain_cac1$gene_id | Kac_K4_CAF_Gain$gene_id %in% Kac_Gain_cac1$gene_id )
+Kac_K4_cac2_Gain = subset(Kac_K4_CAF_Gain, Kac_K4_CAF_Gain$gene_id %in% K4_Gain_cac2$gene_id | Kac_K4_CAF_Gain$gene_id %in% Kac_Gain_cac2$gene_id )
+
+#######################
+#cac-3 analysis
+cac3_lost = subset(H3K27me3_CS_Results_K27promTSS_vWT, H3K27me3_CS_Results_K27promTSS_vWT$logFC_cac3 < -0.75 )
+cac3_retain = subset(H3K27me3_CS_Results_K27promTSS_vWT, ! H3K27me3_CS_Results_K27promTSS_vWT$gene_id %in% cac3_lost$gene_id)
+
+cac3_k27_lost = subset(regions$K27genes, regions$K27genes$gene_id %in% cac3_lost$gene_id)
+cac3_k27_retain = subset(regions$K27genes, regions$K27genes$gene_id %in% cac3_retain$gene_id)
+
+write.table(cac3_k27_lost, file = "cac-3_K27_lost.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+write.table(cac3_k27_retain, file = "cac-3_K27_retain.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+##########################
+#ectopically gained H3K27me3 genes
+CAF1_ectopic_K27_genes = subset(H3K27me3_CS_Results_allgenes_promTSSext_vWT, ! H3K27me3_CS_Results_allgenes_promTSSext_vWT$gene_id %in% K27_enriched_genes$gene_id)
+CAF1_ectopic_K27_genes = subset(CAF1_ectopic_K27_genes, CAF1_ectopic_K27_genes$logFC_cac1 > 1 | CAF1_ectopic_K27_genes$logFC_cac2 > 1)
+
+CAF1_ectopic_K27_genes_CODE = subset(CAF1_ectopic_K27_genes, CAF1_ectopic_K27_genes$gene_id %in% rownames(allDataTPM))
+
+```

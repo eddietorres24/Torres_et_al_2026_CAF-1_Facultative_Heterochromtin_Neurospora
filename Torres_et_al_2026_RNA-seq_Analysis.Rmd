@@ -1,0 +1,2592 @@
+---
+title: "CAF-1_Paper_Figure1_combined_script_ET"
+author: "Eddie Torres"
+date: "2025-06-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Set working environment
+workingdir="C:/Users/eddie/Lewis_Lab_Research/GitHub"
+
+#Set working directory to the correct location for working machine
+knitr::opts_knit$set(root.dir = "workingdir")
+```
+
+```{r load libraries, echo=FALSE}
+library("DESeq2")
+library("ggplot2")
+library("gplots")
+library("ggrepel")
+library("dplyr")
+library("pheatmap")
+library("grid")
+library("corrplot")
+library("RColorBrewer")
+library("scales")
+library("readr")
+library("tidyr")
+library("tidyverse")
+library("scater")
+library("reshape2")
+library("grDevices")
+library("tibble")
+library("VennDiagram")
+library("eulerr")
+library("gridExtra")
+library("scales")
+```
+
+#Code for Violin plot & heatmap
+##DESeq not yet need because I am just averaging raw TPMs for these figures. Will need to run DESeq for volcano plots & Venn Diagrams
+
+```{r read in counts file from featureCounts, echo=FALSE}
+#Bring in table with un-normalized transcription counts; check.names is important if you have dashes in the gene names 
+##row.names=1 command sets geneIDs as the row name
+
+countdataInteractors <- read.table("../text_files/readcounts_All_CAF1paper.merged.txt", header=TRUE,stringsAsFactors=FALSE, row.names=1, check.names=FALSE, sep="\t")
+
+#create matrix containing count data only; i.e. eliminate contig, start, stop, length fields
+##convert count file to matrix. Note:: I initially tried to use as.matrix, but this didn't work. <- data.matrix(countfile) worked fine.
+
+Interactors_countsOnly <- data.matrix(countdataInteractors[ ,6:ncol(countdataInteractors)])
+
+##Run calculateTPM function - must load "scater" library
+Interactors_tpm <- calculateTPM(Interactors_countsOnly, lengths = countdataInteractors[,5])
+
+##convert to matrix again
+allDataTPM  <- data.matrix(Interactors_tpm)
+
+#rename columns with human readable sample names
+##Note: THIS NEXT SECTION REQUIRED MANUAL INPUT INTO A SPREADSHEET OR TEXT EDITOR, this code only reads in the file that was already renamed
+
+names <- read.table(file="names_CAF.txt" , sep="", row.names = 1, header = TRUE)
+colnames(allDataTPM) <- names[,1]
+```
+
+```{r select data from mutants you want to plot and calculate mean TPM, echo=FALSE}
+#Make new matrix
+Averaged_Orderd_KO_data <- cbind(rowMeans(allDataTPM[,22:25], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,26:28], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,29:31], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,4:6], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,7:9], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,10:12], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,16:18], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,13:15], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,19:21], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,32:34], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,35:37], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,38:40], na.rm = TRUE),
+                                 rowMeans(allDataTPM[,41:42], na.rm = TRUE))
+#Rename columns
+averageRowIDs=c("WT","set-7","cac-1","cac-2","cac-3","naf-1","naf-2","asf-1","ATRX","cac-1_cac-2","cac-1_suz-12","suz-12","ash-1")
+colnames(Averaged_Orderd_KO_data) <- averageRowIDs
+
+#Make subsetted dfs i will want for figures
+
+Data_Chaperones = Averaged_Orderd_KO_data [,1:9]
+Data_ash1 = Averaged_Orderd_KO_data [,c(1,3:5,13)]
+Data_Doubles = Averaged_Orderd_KO_data [,c(1,12,3,11)]
+
+```
+
+```{r subseting data to include genes of interest, echo=FALSE} 
+#subset data to sample only PRC2-target genes
+##reading in geneIDs of PRC2 target genes (promoters and genes fully covered by K27)
+Prc2targets <- read.table("../bed_files/H3K27me3_methylated_genes_FINAL.bed", header=FALSE, stringsAsFactors=FALSE, check.names=FALSE, sep="\t") 
+
+Prc2targetTPM <- subset(allDataTPM, rownames(allDataTPM)%in%Prc2targets[,10])
+
+#This gene gets left out becausei had to rename it in my bed file due to blanks. I need to add it back manually because the subsetting doesn't recognize the new name
+lac <- allDataTPM[rownames(allDataTPM) == "laccase precursor", ]
+Prc2targetTPM <- rbind(Prc2targetTPM, lac)
+
+#rename rows of added gene back to original name
+rownames(Prc2targetTPM)[rownames(Prc2targetTPM) == "lac"] <- "laccase precursor"
+
+#Subset Data (n = 575)
+AVERAGE_Prc2targetTPM <- subset(Data_Chaperones, rownames(Data_Chaperones)%in%rownames(Prc2targetTPM))
+AVERAGE_Prc2targetTPM_Double <- subset(Data_Doubles, rownames(Data_Doubles)%in%rownames(Prc2targetTPM))
+
+#Subset data to filter out non-repressed PRC2 targets regions that got through (cutting out any genes over 10 tpm in WT). Choice of 10 TPM cutoff was arbitrary
+##These are likely genes whose promoters are not marked by H3K27me3, genes on the edge of K27 regions, and/or bivalent genes
+AVERAGE_Prc2targetTPM <- subset(AVERAGE_Prc2targetTPM, (AVERAGE_Prc2targetTPM[,1] < 10))
+AVERAGE_Prc2targetTPM_Double <- subset(AVERAGE_Prc2targetTPM_Double, (AVERAGE_Prc2targetTPM_Double[,1] < 10))
+
+#writing "repressed" genes to a new bed file to report
+repress_bed = subset(Prc2targets, Prc2targets$V10 %in% rownames(AVERAGE_Prc2targetTPM))
+write.table(repress_bed, file = "H3K27me3_Repressed_Genes.bed", row.names = FALSE, sep="\t", quote = FALSE)
+
+#resubet PRC2 targets after filtering
+Prc2targetTPM_Chap <- rownames(Prc2targetTPM) %in% rownames(AVERAGE_Prc2targetTPM)
+Prc2targetTPM_Double <- subset(Prc2targetTPM, rownames(Prc2targetTPM)%in%rownames(AVERAGE_Prc2targetTPM_Double))
+
+#Add sudocount and log transform (if necessary)
+AVERAGE_Prc2targetTPM <- AVERAGE_Prc2targetTPM + 1
+AVERAGE_Prc2targetTPM <- log2(AVERAGE_Prc2targetTPM)
+#
+AVERAGE_Prc2targetTPM_Double <- AVERAGE_Prc2targetTPM_Double + 1
+AVERAGE_Prc2targetTPM_Double <- log2(AVERAGE_Prc2targetTPM_Double)
+
+
+#melt data to get it into a format ggplot can use (library "reshape2")
+meltedAveragePRC2targetData <- melt(AVERAGE_Prc2targetTPM, value.name = 'Count',
+                             varnames=c('GeneID', 'Sample'))
+
+meltedAverageDoublePRC2targetData <- melt(AVERAGE_Prc2targetTPM_Double, value.name = 'Count',
+                             varnames=c('GeneID', 'Sample'))
+
+```
+
+```{r statistics, echo=FALSE}
+#I want to run statistical tests to determine the signifcance of the difference in expression b/w mutant strains and WT
+
+AVERAGE_Prc2targetTPM_ALL <- subset(Averaged_Orderd_KO_data, rownames(Averaged_Orderd_KO_data)%in%rownames(Prc2targetTPM))
+
+#Subset data to filter out non-repressed PRC2 targets regions that got through (cutting out any genes over 10 tpm in WT). Choice of 10 TPM cutoff was arbitrary
+##These are likely genes whose promoters are not marked by H3K27me3, genes on the edge of K27 regions, and/or bivalent genes
+AVERAGE_Prc2targetTPM_ALL <- subset(AVERAGE_Prc2targetTPM_ALL, (AVERAGE_Prc2targetTPM_ALL[,1] < 10))
+
+#resubet PRC2 targets after filtering
+Prc2targetTPM_ALL <- subset(Prc2targetTPM, rownames(Prc2targetTPM)%in%rownames(AVERAGE_Prc2targetTPM_ALL))
+
+#Add sudocount and log transform (if necessary)
+AVERAGE_Prc2targetTPM_ALL <- AVERAGE_Prc2targetTPM_ALL + 1
+AVERAGE_Prc2targetTPM_ALL <- log2(AVERAGE_Prc2targetTPM_ALL)
+
+## First, I make histogram to visualize distribution of data. we'll use cac-1 as a comparison to WT
+# hist <- as.data.frame(AVERAGE_Prc2targetTPM_ALL)
+# 
+# long_hist <- hist %>%
+#   select(WT, `cac-1`) %>%
+#   pivot_longer(cols = everything(), names_to = "Strain", values_to = "TPM")
+# 
+# # Plot overlapping histograms
+# ggplot(long_hist, aes(x = TPM, fill = Strain)) +
+#   geom_histogram(position = "identity", alpha = 0.5, bins = 15, color = "black") +
+#   theme_minimal() +
+#   labs(title = "TPM Distribution in WT and cac-1",
+#        x = "TPM",
+#        y = "Frequency") +
+#   scale_fill_manual(values = c("WT" = "steelblue", "cac-1" = "tomato"))
+
+#Histogram shows non-normal distribution (skewed right), so proceed with wilcox test instead of t test
+##running tests
+set7_stat <- wilcox.test(hist$`set-7`, hist$WT, alternative = "greater")
+cac1_stat <- wilcox.test(hist$`cac-1`, hist$WT, alternative = "greater")
+cac2_stat <- wilcox.test(hist$`cac-2`, hist$WT, alternative = "greater")
+cac3_stat <- wilcox.test(hist$`cac-3`, hist$WT, alternative = "greater")
+naf1_stat <- wilcox.test(hist$`naf-1`, hist$WT, alternative = "greater")
+naf2_stat <- wilcox.test(hist$`naf-2`, hist$WT, alternative = "greater")
+asf1_stat <- wilcox.test(hist$`asf-1`, hist$WT, alternative = "greater")
+atrx_stat <- wilcox.test(hist$`ATRX`, hist$WT, alternative = "greater")
+cac1_2_stat <- wilcox.test(hist$`cac-1_cac-2`, hist$WT, alternative = "greater")
+cac1_suz12_stat <- wilcox.test(hist$`cac-1_suz-12`, hist$WT, alternative = "greater")
+suz12_stat <- wilcox.test(hist$`suz-12`, hist$WT, alternative = "greater")
+ash1_stat <- wilcox.test(hist$`ash-1`, hist$WT, alternative = "greater")
+
+#Make a list of all wilcox results objects
+wilcox_list <- list(set7_stat, cac1_stat, cac2_stat, cac3_stat, naf1_stat, naf2_stat, asf1_stat, atrx_stat, cac1_2_stat, cac1_suz12_stat, suz12_stat, ash1_stat)
+
+#rename objects
+names(wilcox_list) <- c("set7", "cac1", "cac2", "cac3", "naf1", "naf2", "asf1", "atrx", "cac-1_cac-2", "cac-1_suz-12", "suz-12", "ash-1")
+
+#Extract relevant stats into a dataframe
+wilcox_df <- do.call(rbind, lapply(wilcox_list, function(res) {
+  data.frame(
+    statistic = unname(res$statistic),
+    p_value = res$p.value,
+    alternative = res$alternative,
+    method = res$method
+  )
+}))
+
+# Set strain names as row names
+rownames(wilcox_df) <- names(wilcox_list)
+
+# Save to CSV
+write.csv(wilcox_df, "Wilcoxon_summary_stats.csv", row.names = TRUE)
+```
+
+```{r Plotting data in Violin Plot, echo=FALSE}
+# Define factor order and formatted x-axis labels
+label_order <- c("WT", "set-7", "cac-1", "cac-2", "cac-3", "naf-1", "naf-2", "asf-1", "ATRX")
+formatted_labels <- c(
+  "WT",
+  expression(italic("\u0394set-7")),
+  expression(italic("\u0394cac-1")),
+  expression(italic("\u0394cac-2")),
+  expression(italic("\u0394cac-3")),
+  expression(italic("\u0394naf-1")),
+  expression(italic("\u0394naf-2")),
+  expression(italic("\u0394asf-1")),
+  expression(italic("\u0394atrx"))
+)
+
+#Group and summarize
+total2 <- meltedAveragePRC2targetData %>%
+  group_by(Sample)
+
+total_dist <- meltedAveragePRC2targetData %>%
+  group_by(Sample) %>%
+  summarise(num = n())
+
+#Set dodge for violin spacing
+dodge <- position_dodge(width = 1)
+
+#Build plot
+violin <- total2 %>%
+  left_join(total_dist) %>%
+  arrange(factor(Sample, levels = label_order)) %>%
+  mutate(Sample = factor(Sample, levels = label_order)) %>%
+  ggplot(aes(x = Sample, y = Count)) +
+  geom_violin(position = dodge, scale = "width", trim = FALSE) +
+  stat_summary(fun = "mean", geom = "crossbar", width = 0.25, colour = "red") +
+  scale_x_discrete(labels = formatted_labels) +
+  labs(
+    x = "Strain",
+    y = expression("Expression Level (log"[2]~"(TPM+1))")) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.text.x = element_text(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_text(color = "black"),
+    axis.title.y = element_text(color = "black")
+  )
+
+#check it
+print(violin)
+
+#save plot
+ggsave("./CAF-1_K27_Violin_Paper_Final.pdf", plot=violin, width = 10, height = 8, unit="in",  dpi=400)
+```
+
+```{r Plotting data on heatmap, echo=FALSE}
+##Keep Only Genes that are expressed in at least one sample (n = 564)
+GenesWithChanges <- subset(AVERAGE_Prc2targetTPM, (rowSums(AVERAGE_Prc2targetTPM) > 0))
+
+#plot in the desired column order; did this by subsetting the dataset based on sample list 'altorder' above
+heatmap <- pheatmap::pheatmap(GenesWithChanges, color = colorRampPalette(rev(brewer.pal(n = 9, name ="RdBu")))(100), cellwidth = NA, cellheight = NA, scale = "row", cluster_rows = T, cluster_cols = F, clustering_method="centroid", clustering_distance_cols="euclidean", legend=T, show_rownames=F, show_colnames=T, fontsize_col=10, treeheight_row=0, treeheight_col=5, height = 1.5, width = 2.5, fontsize = 8)
+
+#plot
+heatmap_plot <- heatmap[[4]]
+
+#save plot
+ggsave(filename = "./CAF-1_K27_Heatmap_Paper_Final.pdf", plot = heatmap_plot, dpi=600, height=4, width=3)
+```
+
+```{r Plotting data in Violin Plot for Double Mutants, echo=FALSE}
+# Define factor order and formatted x-axis labels
+label_order <- c("WT", "suz-12", "cac-1", "cac-1_suz-12")
+formatted_labels <- c(
+  "WT",
+  expression(italic("\u0394suz-12")),
+  expression(italic("\u0394cac-1")),
+  expression(italic("\u0394cac-1_suz-12"))
+)
+
+#Group and summarize
+total2 <- meltedAverageDoublePRC2targetData %>%
+  group_by(Sample)
+
+total_dist <- meltedAverageDoublePRC2targetData %>%
+  group_by(Sample) %>%
+  summarise(num = n())
+
+#Set dodge for violin spacing
+dodge <- position_dodge(width = 1)
+
+#Build plot
+violin <- total2 %>%
+  left_join(total_dist) %>%
+  arrange(factor(Sample, levels = label_order)) %>%
+  mutate(Sample = factor(Sample, levels = label_order)) %>%
+  ggplot(aes(x = Sample, y = Count)) +
+  geom_violin(position = dodge, scale = "width", trim = FALSE) +
+  stat_summary(fun = "mean", geom = "crossbar", width = 0.25, colour = "red") +
+  scale_x_discrete(labels = formatted_labels) +
+  labs(
+    x = "Strain",
+    y = expression("Expression Level (log"[2]~"(TPM+1))")) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.text.x = element_text(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.x = element_text(color = "black"),
+    axis.title.y = element_text(color = "black")
+  )
+
+#check it
+print(violin)
+
+#save plot
+ggsave("./CAF-1_Double_Mutant_K27_Violin_Paper_Final.pdf", plot=violin, width = 10, height = 8, unit="in",  dpi=400)
+```
+
+```{r Plotting data on heatmap for Double Mutants, echo=FALSE}
+##Keep Only Genes that are expressed in at least one sample (n = 501)
+GenesWithChanges <- subset(AVERAGE_Prc2targetTPM_Double, (rowSums(AVERAGE_Prc2targetTPM_Double) > 0))
+
+#plot in the desired column order; did this by subsetting the dataset based on sample list 'altorder' above
+heatmap <- pheatmap::pheatmap(GenesWithChanges, color = colorRampPalette(rev(brewer.pal(n = 9, name ="RdBu")))(100), cellwidth = NA, cellheight = NA, scale = "row", cluster_rows = T, cluster_cols = F, clustering_method="centroid", clustering_distance_cols="euclidean", legend=T, show_rownames=F, show_colnames=T, fontsize_col=10, treeheight_row=0, treeheight_col=5, height = 1.5, width = 2.5, fontsize = 8)
+
+#plot
+heatmap_plot <- heatmap[[4]]
+
+#save plot
+ggsave(filename = "./CAF-1_Double_Mutant_K27_Heatmap_Paper_Final.pdf", plot = heatmap_plot, dpi=600, height=4, width=3)
+```
+
+#Moving on to DESeq2
+##We will use this to determine the genes significantly DE (p < 0.05 & < 0.01)
+##These lists will be used to make volcano plots, Venn Diagrams, and for GO Analysis
+
+```{r importing counts}
+#Note: file was already read in, using a different variable name for DESeq to avoid confusion this was already done
+## change ncol to match number of columns
+cts_numeric <- matrix(as.numeric(Interactors_countsOnly), ncol = 42)
+dimnames(cts_numeric) <- list(rownames(Interactors_countsOnly), colnames(Interactors_countsOnly))
+
+#Rename columns
+colnames(cts_numeric) <- names[,1]
+```
+
+```{r group samples, echo=FALSE}
+#grouping samples by strain for DESeq analysis
+##Note, I am leaving old cac-1 strain in analysis since the counts are in the file, but will not be utilizing the data for figures. I will be using the "cac-1_new" data instead
+cac1 <- rowMeans(cts_numeric[, 29:31], na.rm = TRUE)
+cac2 <- rowMeans(cts_numeric[, 4:6], na.rm = TRUE)
+cac3 <- rowMeans(cts_numeric[, 7:9], na.rm = TRUE)
+naf1 <- rowMeans(cts_numeric[, 10:12], na.rm = TRUE)
+asf1 <- rowMeans(cts_numeric[, 13:15], na.rm = TRUE)
+naf2 <- rowMeans(cts_numeric[, 16:18], na.rm = TRUE)
+ATRX <- rowMeans(cts_numeric[, 19:21], na.rm = TRUE)
+WT <- rowMeans(cts_numeric[, 22:25], na.rm = TRUE)
+set7 <- rowMeans(cts_numeric[, 26:28], na.rm = TRUE)
+cac1_cac2 <- rowMeans(cts_numeric[, 32:34], na.rm = TRUE)
+cac1_suz12 <- rowMeans(cts_numeric[, 35:37], na.rm = TRUE)
+suz12 <- rowMeans(cts_numeric[, 38:40], na.rm = TRUE)
+ash1 <- rowMeans(cts_numeric[, 41:42], na.rm = TRUE)
+```
+
+```{r load coldata, echo = FALSE}
+#Loading in column data file. This will be used to assign the counts samples to the correct strains in DESeq
+##Make sure you have the desired strain listed as a control in this sheet
+coldata <- read.csv("../coldata.csv", header= TRUE, row.names = 1)
+coldata$condition <- factor(coldata$condition)
+coldata$type <- factor(coldata$type)
+
+#Confirm that the number and order of samples are the same in each dataset before proceeding. Important, because this will throw off/fail DESeq otherwise
+all(rownames(coldata) %in% colnames(cts_numeric))
+all(rownames(coldata) == colnames(cts_numeric))
+
+```
+
+```{r, Run DESeq analysis, echo=FALSE}
+# --- your setup code (unchanged) ---
+cts_numeric_pseudo = cts_numeric + 1
+dds <- DESeqDataSetFromMatrix(countData = round(cts_numeric_pseudo),
+                              colData = coldata,
+                              design = ~ condition)
+keep <- rowSums(counts(dds)) > 38
+dds <- dds[keep,]
+dds$condition <- relevel(dds$condition, ref = "WT")
+
+dds2 <- DESeq(dds)
+plotDispEsts(dds2)
+
+```
+
+```{r create csvs with DE genes for each strain, echo=FALSE}
+export_deseq_csvs <- function(
+  dds2,
+  ref_level = "WT",
+  strains,
+  neurospora_bed_path,
+  prc2_targets_path,
+  lfc_cutoff = 1.0,
+  alphas = c(0.05, 0.01)
+) {
+  ## ---- load mappings ----
+  neurospora  <- read.table(neurospora_bed_path, header = TRUE, sep = "\t",
+                            check.names = FALSE, stringsAsFactors = FALSE)
+  Prc2targets <- read.table(prc2_targets_path,   header = FALSE, sep = "\t",
+                            check.names = FALSE, stringsAsFactors = FALSE)
+
+  choose_first <- function(nms, opts) opts[opts %in% nms][1]
+  idcol_bed <- choose_first(names(neurospora),  c("VALUE","gene_id","NCU","Attributes","V11","V4"))
+  idcol_prc <- choose_first(names(Prc2targets), c("V11","VALUE","gene_id","NCU","Attributes","V4"))
+  if (is.na(idcol_bed) || is.na(idcol_prc)) stop("Could not find ID columns in BED/PRC2 files.")
+  prc2_ids <- unique(Prc2targets[[idcol_prc]])
+
+  ## ---- helpers ----
+  alpha_lab  <- function(a) formatC(a, format = "f", digits = 2)
+  lfc_tag    <- function(x) paste0("ge_", gsub("\\.", "p", sprintf("%.1f", x)))  # e.g., ge_1p0
+  sanitize   <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
+  safe_write <- function(df, fname) utils::write.csv(df, file = sanitize(fname), row.names = FALSE)
+  bed_from_ids <- function(ids) neurospora[neurospora[[idcol_bed]] %in% unique(ids), , drop = FALSE]
+
+  # RAW (unshrunken) DESeq2 results used here
+  res_for <- function(strain, alpha) {
+    df <- as.data.frame(DESeq2::results(dds2, contrast = c("condition", strain, ref_level), alpha = alpha))
+    df$NCU <- rownames(df)
+    df <- df[!is.na(df$padj), ]
+    sig <- df[df$padj < alpha & abs(df$log2FoldChange) >= lfc_cutoff, ]
+    up  <- sig[sig$log2FoldChange >=  lfc_cutoff, ]
+    dn  <- sig[sig$log2FoldChange <= -lfc_cutoff, ]
+    list(all = sig, up = up, dn = dn, full = df)
+  }
+
+  write_deg_csvs <- function(strain, alpha, reslist) {
+    a   <- alpha_lab(alpha)
+    lt  <- lfc_tag(lfc_cutoff)
+    base <- paste0(strain, "__alpha", a)
+
+    ## 1) ALL results (no cutoffs), RAW LFCs
+    res_all <- as.data.frame(DESeq2::results(dds2, contrast = c("condition", strain, ref_level),
+                                             independentFiltering = FALSE))
+    res_all$NCU <- rownames(res_all)
+    safe_write(res_all[, c("NCU", setdiff(names(res_all), "NCU"))],
+               sprintf("%s__ALL_results_LFC.csv", base))
+
+    ## 2) DE table: padj<alpha & |LFC|>=cutoff (both directions)
+    safe_write(reslist$all[, c("NCU", setdiff(names(reslist$all), "NCU"))],
+               sprintf("%s__DE_absLFC_%s.csv", base, lt))
+
+    ## 3) UP results (actual rows meeting cutoffs)
+    if (nrow(reslist$up)) {
+      safe_write(reslist$up[, c("NCU", setdiff(names(reslist$up), "NCU"))],
+                 sprintf("%s__UP_results_LFC_%s.csv", base, lt))
+    } else {
+      safe_write(data.frame(), sprintf("%s__UP_results_LFC_%s.csv", base, lt))
+    }
+
+    ## 4) DOWN results (actual rows meeting cutoffs)
+    if (nrow(reslist$dn)) {
+      safe_write(reslist$dn[, c("NCU", setdiff(names(reslist$dn), "NCU"))],
+                 sprintf("%s__DOWN_results_LFC_%s.csv", base, lt))
+    } else {
+      safe_write(data.frame(), sprintf("%s__DOWN_results_LFC_%s.csv", base, lt))
+    }
+
+    ## 5) UP gene list (BED-mapped rows)
+    up_ids <- unique(reslist$up$NCU)
+    safe_write(bed_from_ids(up_ids), sprintf("%s__UP_genes.csv", base))
+
+    ## 6) DOWN gene list (BED-mapped rows)
+    dn_ids <- unique(reslist$dn$NCU)
+    safe_write(bed_from_ids(dn_ids), sprintf("%s__DOWN_genes.csv", base))
+
+    ## 7) K27-UP gene list (UP ∩ PRC2 targets)
+    safe_write(bed_from_ids(intersect(up_ids, prc2_ids)), sprintf("%s__K27_UP_genes.csv", base))
+
+    ## 8) nonK27-UP gene list (UP \ PRC2 targets)
+    nonk27_up_ids <- setdiff(up_ids, prc2_ids)
+    safe_write(bed_from_ids(nonk27_up_ids), sprintf("%s__nonK27_UP_genes.csv", base))
+
+    invisible(list(up_ids = up_ids, dn_ids = dn_ids, de_ids = unique(reslist$all$NCU)))
+  }
+
+  ## ---- main per-strain loop ----
+  available_levels <- levels(colData(dds2)$condition)
+  deg_map <- list()
+  for (alpha in alphas) {
+    a <- alpha_lab(alpha)
+    for (s in strains) {
+      if (!(s %in% available_levels)) {
+        warning("Skipping '", s, "' — not found in colData(dds2)$condition.")
+        next
+      }
+      rl <- res_for(s, alpha)
+      id_sets <- write_deg_csvs(s, alpha, rl)
+      deg_map[[paste(s, a, sep = "|")]] <- id_sets
+    }
+  }
+
+  ## ---- CAF-1 combos: pairwise (cac1_cac2) & triple (cac1_cac2_cac3) ----
+  # Now includes UP and DOWN intersections (plus existing DE and nonK27_UP)
+  caf1 <- c("cac1","cac2","cac3")
+  have_caf1 <- all(caf1 %in% strains) && all(caf1 %in% available_levels)
+  if (have_caf1) {
+    for (alpha in alphas) {
+      a <- alpha_lab(alpha)
+      key <- function(s) paste(s, a, sep = "|")
+
+      up_sets <- lapply(caf1, function(s) deg_map[[key(s)]]$up_ids)
+      dn_sets <- lapply(caf1, function(s) deg_map[[key(s)]]$dn_ids)
+      de_sets <- lapply(caf1, function(s) deg_map[[key(s)]]$de_ids)
+
+      ## pairwise: cac1 & cac2 (UP)
+      safe_write(bed_from_ids(intersect(up_sets[[1]], up_sets[[2]])),
+                 sprintf("cac1_cac2__alpha%s__UP_intersection.csv", a))
+      ## pairwise: cac1 & cac2 (DOWN)
+      safe_write(bed_from_ids(intersect(dn_sets[[1]], dn_sets[[2]])),
+                 sprintf("cac1_cac2__alpha%s__DOWN_intersection.csv", a))
+
+      ## pairwise: cac1 & cac2 (DE)
+      safe_write(bed_from_ids(intersect(de_sets[[1]], de_sets[[2]])),
+                 sprintf("cac1_cac2__alpha%s__DE_intersection.csv", a))
+
+      ## pairwise: cac1 & cac2 (nonK27_UP)
+      safe_write(bed_from_ids(setdiff(intersect(up_sets[[1]], up_sets[[2]]), prc2_ids)),
+                 sprintf("cac1_cac2__alpha%s__nonK27_UP_intersection.csv", a))
+
+      ## triple: cac1 & cac2 & cac3 (UP)
+      safe_write(bed_from_ids(Reduce(intersect, up_sets)),
+                 sprintf("cac1_cac2_cac3__alpha%s__UP_intersection.csv", a))
+      ## triple: cac1 & cac2 & cac3 (DOWN)
+      safe_write(bed_from_ids(Reduce(intersect, dn_sets)),
+                 sprintf("cac1_cac2_cac3__alpha%s__DOWN_intersection.csv", a))
+
+      ## triple: cac1 & cac2 & cac3 (DE)
+      safe_write(bed_from_ids(Reduce(intersect, de_sets)),
+                 sprintf("cac1_cac2_cac3__alpha%s__DE_intersection.csv", a))
+
+      ## triple: cac1 & cac2 & cac3 (nonK27_UP)
+      safe_write(bed_from_ids(setdiff(Reduce(intersect, up_sets), prc2_ids)),
+                 sprintf("cac1_cac2_cac3__alpha%s__nonK27_UP_intersection.csv", a))
+    }
+  } else {
+    message("CAF-1 combo outputs skipped (one or more of cac1/cac2/cac3 missing).")
+  }
+
+  invisible(deg_map)
+}
+
+# call stays the same
+deg_map <- export_deseq_csvs(
+  dds2,
+  ref_level = "WT",
+  strains = c("cac1","cac2","cac3","set7","naf1","naf2","asf1","atrx","cac1_cac2","cac1_suz12","suz12","ash1"),
+  neurospora_bed_path = "../bed_files/neurospora_genes_edit.bed",
+  prc2_targets_path   = "../bed_files/H3K27me3_methylated_genes_FINAL.bed",
+  lfc_cutoff = 1.0,
+  alphas = c(0.05, 0.01)
+)
+
+```
+
+#GO Analysis
+```{r, my script}
+# GO BP enrichment + lollipop plot for Δcac-1 & Δcac-2 DE genes
+# Requires:
+#   - Nc_GO_mapping.txt  (your FungiDB export)
+#   - cac1_cac2__alpha0.05__DE_intersection.csv  (shared DE genes)
+
+## --- packages ---
+# cran_pkgs <- c("readr","dplyr","tidyr","ggplot2")
+# miss <- setdiff(cran_pkgs, rownames(installed.packages()))
+# if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org")
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager", repos = "https://cloud.r-project.org")
+# BiocManager::install(c("clusterProfiler","GO.db","AnnotationDbi"), ask = FALSE, update = FALSE)
+# 
+# suppressPackageStartupMessages({
+#   library(readr); library(dplyr); library(tidyr); library(ggplot2)
+#   library(clusterProfiler); library(GO.db); library(AnnotationDbi)
+# })
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__DE_intersection.csv"
+out_tag  <- "CAF1_shared_GO"
+out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+stopifnot(file.exists(de_csv_path))
+de_df <- readr::read_csv(de_csv_path, show_col_types = FALSE)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)   # Description is the term name from TERM2NAME
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +          # show shortened names only
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment (cac-1 cac-2 DE)")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+########################################################################################
+###Splitting UP + Downregulated genes in CAF-1 mutants
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_csv_path <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__UP_intersection.csv"
+out_tag <- "CAF1_shared_UP_GO"
+out_res <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+stopifnot(file.exists(de_csv_path))
+de_df <- readr::read_csv(de_csv_path, show_col_types = FALSE)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)   # Description is the term name from TERM2NAME
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +          # show shortened names only
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment (cac-1 cac-2 UP)")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+#######
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__DOWN_intersection.csv"
+out_tag  <- "CAF1_shared_DOWN_GO"
+out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+stopifnot(file.exists(de_csv_path))
+de_df <- readr::read_csv(de_csv_path, show_col_types = FALSE)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)   # Description is the term name from TERM2NAME
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +          # show shortened names only
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment (cac-1 cac-2 DOWN)")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+#########################################################################################
+
+# GO BP enrichment + lollipop plot for Δcac-1Δsuz-12 UP genes
+# Requires:
+#   - Nc_GO_mapping.txt
+#   - cac1_suz12__alpha0.05__UP_genes.csv
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__UP_genes.csv"
+out_tag  <- "cac1_suz12_UP_GO"
+out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+stopifnot(file.exists(de_csv_path))
+de_df <- readr::read_csv(de_csv_path, show_col_types = FALSE)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)   # Description is the term name from TERM2NAME
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +          # show shortened names only
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment (cac-1suz-12 UP)")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+
+#########################################################################################
+
+# GO BP enrichment + lollipop plot for Δcac-1Δsuz-12 DOWN genes
+# Requires:
+#   - Nc_GO_mapping.txt
+#   - cac1_suz12__alpha0.05__DOWN_genes.csv
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_csv_path     <- "../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__DOWN_genes.csv"
+out_tag  <- "cac1_suz12_DOWN_GO"
+out_res  <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+stopifnot(file.exists(de_csv_path))
+de_df <- readr::read_csv(de_csv_path, show_col_types = FALSE)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum   = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum     = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich     = GeneRatioNum / BgRatioNum,
+    FDR            = p.adjust(pvalue, "BH"),
+    minusLog10FDR  = -log10(FDR),
+    Term           = dplyr::coalesce(Description, ID)   # use GO term name (no GO ID)
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## ---- plotting: show ONLY names, shorten long labels, keep uniqueness invisibly ----
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +          # show shortened names only
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment (cac-1suz-12 DOWN)")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+########################################################################################
+###GO Analysis on H3K27me3-marked genes
+all_genes <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv")
+K27genes  <- subset(all_genes, all_genes$NCU %in% rownames(AVERAGE_Prc2targetTPM))
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_input <- K27genes
+out_tag <- "PRC2_targets_GO"
+out_res <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+get_de_df <- function(x) {
+  if (is.data.frame(x) || inherits(x, "tbl_df")) {
+    return(x)
+  }
+  if (is.character(x) && length(x) == 1L) {
+    if (!file.exists(x)) {
+      stop("File does not exist: ", x)
+    }
+    return(readr::read_csv(x, show_col_types = FALSE))
+  }
+  stop("de_input must be either a data.frame or a single file path string.")
+}
+
+de_df <- get_de_df(de_input)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment H3K27me3-marked genes")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+########################################################################################
+###GO Analysis on genes upregulated in set-7
+FP_DE_genes <- read.table(file = "../text_files/FP_DE_genes.txt", header=TRUE, stringsAsFactors=FALSE, row.names=NULL, check.names=FALSE, sep="\t")
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_input <- FP_DE_genes
+out_tag <- "FP_DE_GO"
+out_res <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+get_de_df <- function(x) {
+  if (is.data.frame(x) || inherits(x, "tbl_df")) {
+    return(x)
+  }
+  if (is.character(x) && length(x) == 1L) {
+    if (!file.exists(x)) {
+      stop("File does not exist: ", x)
+    }
+    return(readr::read_csv(x, show_col_types = FALSE))
+  }
+  stop("de_input must be either a data.frame or a single file path string.")
+}
+
+de_df <- get_de_df(de_input)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment DE in False Perithecia")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+########################################################################################
+###GO Analysis on genes upregulated in set-7
+set7_DE_genes <- read.table(file = "../text_files/set7_DE_genes.txt", header=TRUE, stringsAsFactors=FALSE, row.names=NULL, check.names=FALSE, sep="\t")
+
+## --- paths / outputs ---
+fungidb_go_path <- "Nc_GO_mapping.txt"
+de_input <- set7_DE_genes
+out_tag <- "set-7_DE_GO"
+out_res <- paste0(out_tag, "_BP_enrichment.tsv")
+out_plot <- paste0(out_tag, "_BP_lollipop.pdf")
+top_n_terms <- 20
+
+## --- read GO mapping (FungiDB tab with separate ID/name cols) ---
+stopifnot(file.exists(fungidb_go_path))
+go_raw <- readr::read_tsv(fungidb_go_path, show_col_types = FALSE)
+
+gene_col <- intersect(names(go_raw), c("Gene ID","gene_id","Genes","ID"))[1]
+if (is.na(gene_col)) stop("Could not find a 'Gene ID' column in Nc_GO_mapping.txt")
+
+pairs <- list(
+  list(id="Curated GO Process IDs",   nm="Curated GO Processes",   ns="BP"),
+  list(id="Computed GO Process IDs",  nm="Computed GO Processes",   ns="BP"),
+  list(id="Curated GO Component IDs", nm="Curated GO Components",   ns="CC"),
+  list(id="Computed GO Component IDs",nm="Computed GO Components",  ns="CC"),
+  list(id="Curated GO Function IDs",  nm="Curated GO Functions",    ns="MF"),
+  list(id="Computed GO Function IDs", nm="Computed GO Functions",   ns="MF")
+)
+
+make_long <- function(idcol, nmcol, ns){
+  if (!(idcol %in% names(go_raw))) return(NULL)
+  tmp <- go_raw %>%
+    dplyr::transmute(
+      gene_id = .data[[gene_col]],
+      go_id   = as.character(.data[[idcol]]),
+      go_name = if (nmcol %in% names(go_raw)) as.character(.data[[nmcol]]) else NA_character_
+    ) %>%
+    dplyr::filter(!is.na(go_id), nzchar(go_id)) %>%
+    tidyr::separate_rows(go_id,  sep = "\\s*;\\s*") %>%
+    tidyr::separate_rows(go_name, sep = "\\s*;\\s*") %>%
+    dplyr::mutate(namespace = ns) %>%
+    dplyr::distinct()
+  tmp
+}
+
+go_map <- do.call(
+  dplyr::bind_rows,
+  lapply(pairs, function(p) make_long(p$id, p$nm, p$ns))
+) %>%
+  dplyr::filter(grepl("^GO:", go_id)) %>%
+  dplyr::distinct()
+
+# fill missing names from GO.db
+need_names <- setdiff(unique(go_map$go_id), unique(go_map$go_id[!is.na(go_map$go_name) & nzchar(go_map$go_name)]))
+if (length(need_names)) {
+  dbn <- AnnotationDbi::select(GO.db, keys = need_names, keytype = "GOID", columns = "TERM")
+  dbn <- dplyr::rename(dbn, go_id = GOID, go_name_db = TERM)
+  go_map <- go_map %>%
+    dplyr::left_join(dbn, by = "go_id") %>%
+    dplyr::mutate(go_name = dplyr::coalesce(go_name, go_name_db)) %>%
+    dplyr::select(-go_name_db)
+}
+
+## --- read shared DE genes, auto-detect ID column ---
+get_de_df <- function(x) {
+  if (is.data.frame(x) || inherits(x, "tbl_df")) {
+    return(x)
+  }
+  if (is.character(x) && length(x) == 1L) {
+    if (!file.exists(x)) {
+      stop("File does not exist: ", x)
+    }
+    return(readr::read_csv(x, show_col_types = FALSE))
+  }
+  stop("de_input must be either a data.frame or a single file path string.")
+}
+
+de_df <- get_de_df(de_input)
+
+guess_id_col <- function(df){
+  # prefer obvious columns
+  cand <- intersect(names(df), c("gene_id","Gene ID","ID","Genes","NCU","NCU_ID","NCUid","Attributes","VALUE"))
+  if (length(cand)) return(cand[1])
+  # else pick column with most NCU-like entries
+  score <- sapply(df, function(x) sum(grepl("^NCU\\d{5}$", as.character(x))))
+  names(which.max(score))
+}
+de_col <- guess_id_col(de_df)
+genes_shared <- unique(as.character(de_df[[de_col]]))
+
+## --- universe: all genes that have any GO term (quick + conservative) ---
+universe_genes <- unique(as.character(go_map$gene_id))
+
+## --- TERM2GENE / TERM2NAME for Biological Process only ---
+TERM2GENE <- go_map %>%
+  dplyr::filter(tolower(namespace) %in% c("bp","biological process","biological_process","p")) %>%
+  dplyr::select(go_id, gene_id) %>% dplyr::distinct()
+TERM2NAME <- go_map %>%
+  dplyr::select(go_id, go_name) %>% dplyr::distinct()
+
+## --- enrichment (BH FDR; we’ll filter to FDR <= 0.05 for plotting) ---
+enr_bp <- clusterProfiler::enricher(
+  gene          = genes_shared,
+  universe      = universe_genes,
+  TERM2GENE     = TERM2GENE,
+  TERM2NAME     = TERM2NAME,
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 1.0,
+  qvalueCutoff  = 1.0
+)
+if (is.null(enr_bp) || nrow(enr_bp@result) == 0)
+  stop("No BP terms returned. Check IDs vs GO mapping.")
+
+## --- compute fold-enrichment and tidy ---
+res <- enr_bp@result %>%
+  dplyr::mutate(
+    GeneRatioNum = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    BgRatioNum   = sapply(strsplit(BgRatio,   "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])),
+    FoldEnrich   = GeneRatioNum / BgRatioNum,
+    FDR          = p.adjust(pvalue, "BH"),
+    minusLog10FDR = -log10(FDR),
+    Term = dplyr::coalesce(Description, ID)
+  ) %>%
+  dplyr::arrange(dplyr::desc(FoldEnrich))
+
+readr::write_tsv(res, out_res)
+
+## --- lollipop plot: names on y, bigger size spread, vivid colors; FDR-filtered ---
+max_chars <- 37
+shorten <- function(x, n = max_chars) ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
+
+plot_df <- res %>%
+  dplyr::filter(FDR <= 0.05) %>%                # significant terms only
+  dplyr::slice_head(n = top_n_terms) %>%
+  dplyr::mutate(
+    LabelShow = shorten(Term),                  # what you SEE (no GO IDs)
+    LabelKey  = paste0(Term, "\u200B", dplyr::row_number()), # invisible uniqueness
+    Label     = factor(LabelKey, levels = rev(LabelKey))
+  )
+
+lab_map <- setNames(plot_df$LabelShow, plot_df$LabelKey)
+
+p <- ggplot(plot_df, aes(FoldEnrich, Label)) +
+  geom_segment(aes(x = 0, xend = FoldEnrich, yend = Label), linewidth = 0.8) +
+  geom_point(aes(size = Count, color = minusLog10FDR)) +
+  scale_size(range = c(3, 10), name = "N. of Genes") +
+  scale_color_viridis_c(option = "plasma", name = expression(-log[10]("FDR"))) +
+  scale_y_discrete(labels = lab_map) +
+  labs(x = "Fold Enrichment", y = NULL,
+       title = expression("GO Biological Process Enrichment Upregulated in set-7")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(size = 6),
+    axis.text.x  = element_text(size = 9),
+    legend.text  = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(size = 12, hjust = 0.5),
+    panel.grid.major.y = element_blank()
+  )
+
+ggplot2::ggsave(out_plot, p, width = 7, height = 5)
+p
+
+```
+
+#Next, make Volcano Plots displaying all DE genes
+```{r, Volcano Plots}
+#Make New variables for plot
+##read csvs with log2FC data
+cac1_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv")
+cac2_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv")
+cac3_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv")
+set7_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv")
+cac1_suz12_vol <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_SUZ12__alpha0.05__ALL_results_LFC.csv")
+
+#I need to get rid of a few genes with a p-value of 0, as well as the knocked-out gene itself
+cac1_vol <- cac1_vol[cac1_vol$padj != 0, ]
+cac2_vol <- cac2_vol[cac2_vol$padj != 0, ]
+cac3_vol <- cac3_vol[cac3_vol$padj != 0, ]
+set7_vol <- set7_vol[set7_vol$padj != 0, ]
+cac1_suz12_vol <- cac1_suz12_vol[cac1_vol$padj != 0, ]
+cac1_vol <- cac1_vol[-which.min(cac1_vol$log2FoldChange), ]
+cac2_vol <- cac2_vol[-which.min(cac2_vol$log2FoldChange), ]
+cac3_vol <- cac3_vol[-which.min(cac3_vol$log2FoldChange), ]
+set7_vol <- set7_vol[-which.min(set7_vol$log2FoldChange), ]
+cac1_suz12_vol <- cac1_suz12_vol[-which.min(cac1_suz12_vol$log2FoldChange), ]
+cac1_suz12_vol <- subset(cac1_suz12_vol, NCU != "NCU05460")
+
+##cac-1
+#Assign categories with NS prioritized
+cac1_vol$category <- case_when(
+  cac1_vol$log2FoldChange > -1 & cac1_vol$log2FoldChange < 1 ~ "NS",
+  cac1_vol$NCU %in% Prc2targets$V11 ~ "PRC2",
+  cac1_vol$log2FoldChange > 1 & cac1_vol$padj < 0.05 ~ "Upregulated",
+  cac1_vol$log2FoldChange < -1 & cac1_vol$padj < 0.05 ~ "Downregulated",
+  TRUE ~ "NS"
+)
+
+#Reorder so PRC2 is plotted last (on top)
+cac1_vol <- cac1_vol[order(cac1_vol$category == "PRC2"), ]
+
+#Plot
+library(ggplot2)
+library(scales)  # breaks_width(), pseudo_log_trans()
+
+cac1_volcano_plot <- ggplot(cac1_vol, aes(
+  x = log2FoldChange,
+  y = -log10(padj),
+  color = category
+)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "red",
+      "Downregulated" = "blue",
+      "PRC2" = "orange2",
+      "NS" = "grey"
+    ),
+    breaks = c("Upregulated", "Downregulated", "PRC2"), # only show these in legend
+    labels = c("Upregulated", "Downregulated", "PRC2")
+  ) +
+  labs(
+    x = expression(paste("log"[2], "FoldChange(cac-1/WT)")),
+    y = expression(paste("-log"[10], "(p-value)")),
+    title = "cac-1 vs WT"
+  ) + 
+  scale_x_continuous(breaks = breaks_width(3), minor_breaks = breaks_width(1)) + 
+  scale_y_continuous(trans = pseudo_log_trans(base = 10, sigma = 2),
+                     breaks = c(0,2,5,10,20,50,100,200,300),
+                     limits = c(0, NA)) + 
+  coord_cartesian(ylim = c(0, 300)) +
+  geom_vline(xintercept = c(-1, 1), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  geom_hline(yintercept = -log10(0.05), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.title.y = element_text(face = "bold", margin = margin(0, 20, 0, 0), size = rel(1.1), color = 'black'),
+    axis.title.x = element_text(face = "bold", margin = margin(20, 0, 0, 0), size = rel(1.1), color = 'black',),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5, color = "black"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_blank() 
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 5)))  # bigger legend dots
+
+#Print the plot
+print(cac1_volcano_plot)
+
+ggsave("./cac1_volcano_plot_FINAL.pdf", plot=cac1_volcano_plot, width = 12, height = 9, unit="in",  dpi=400)
+
+##cac-2
+#Assign categories with NS prioritized
+cac2_vol$category <- case_when(
+  cac2_vol$log2FoldChange > -1 & cac2_vol$log2FoldChange < 1 ~ "NS",
+  cac2_vol$NCU %in% Prc2targets$V11 ~ "PRC2",
+  cac2_vol$log2FoldChange > 1 & cac2_vol$padj < 0.05 ~ "Upregulated",
+  cac2_vol$log2FoldChange < -1 & cac2_vol$padj < 0.05 ~ "Downregulated",
+  TRUE ~ "NS"
+)
+
+#Reorder so PRC2 is plotted last (on top)
+cac2_vol <- cac2_vol[order(cac2_vol$category == "PRC2"), ]
+
+#Plot
+cac2_volcano_plot <- ggplot(cac2_vol, aes(
+  x = log2FoldChange,
+  y = -log10(padj),
+  color = category
+)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "red",
+      "Downregulated" = "blue",
+      "PRC2" = "orange2",
+      "NS" = "grey"
+    ),
+    breaks = c("Upregulated", "Downregulated", "PRC2"), # only show these in legend
+    labels = c("Upregulated", "Downregulated", "PRC2")
+  ) +
+  labs(
+    x = expression(paste("log"[2], "FoldChange(cac-2/WT)")),
+    y = expression(paste("-log"[10], "(p-value)")),
+    title = "cac-2 vs WT"
+  ) + 
+  scale_x_continuous(breaks = breaks_width(3), minor_breaks = breaks_width(1)) + 
+  scale_y_continuous(trans = pseudo_log_trans(base = 10, sigma = 2),
+                     breaks = c(0,2,5,10,20,50,100,200,300),
+                     limits = c(0, NA)) + 
+  coord_cartesian(ylim = c(0, 300)) +
+  geom_vline(xintercept = c(-1, 1), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  geom_hline(yintercept = -log10(0.05), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.title.y = element_text(face = "bold", margin = margin(0, 20, 0, 0), size = rel(1.1), color = 'black'),
+    axis.title.x = element_text(face = "bold", margin = margin(20, 0, 0, 0), size = rel(1.1), color = 'black',),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5, color = "black"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_blank() 
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 5)))  # bigger legend dots
+
+#Print the plot
+print(cac2_volcano_plot)
+
+ggsave("./cac2_volcano_plot_FINAL.pdf", plot=cac2_volcano_plot, width = 12, height = 9, unit="in",  dpi=400)
+
+##cac-3
+#Assign categories with NS prioritized
+cac3_vol$category <- case_when(
+  cac3_vol$log2FoldChange > -1 & cac3_vol$log2FoldChange < 1 ~ "NS",
+  cac3_vol$NCU %in% Prc2targets$V11 ~ "PRC2",
+  cac3_vol$log2FoldChange > 1 & cac3_vol$padj < 0.05 ~ "Upregulated",
+  cac3_vol$log2FoldChange < -1 & cac3_vol$padj < 0.05 ~ "Downregulated",
+  TRUE ~ "NS"
+)
+
+#Reorder so PRC2 is plotted last (on top)
+cac3_vol <- cac3_vol[order(cac3_vol$category == "PRC2"), ]
+
+#Plot
+cac3_volcano_plot <- ggplot(cac3_vol, aes(
+  x = log2FoldChange,
+  y = -log10(padj),
+  color = category
+)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "red",
+      "Downregulated" = "blue",
+      "PRC2" = "orange2",
+      "NS" = "grey"
+    ),
+    breaks = c("Upregulated", "Downregulated", "PRC2"), # only show these in legend
+    labels = c("Upregulated", "Downregulated", "PRC2")
+  ) +
+  labs(
+    x = expression(paste("log"[2], "FoldChange(cac-3/WT)")),
+    y = expression(paste("-log"[10], "(p-value)")),
+    title = "cac-3 vs WT"
+  ) + 
+  scale_x_continuous(breaks = breaks_width(3), minor_breaks = breaks_width(1)) + 
+  scale_y_continuous(trans = pseudo_log_trans(base = 10, sigma = 2),
+                     breaks = c(0,2,5,10,20,50,100,200,300),
+                     limits = c(0, NA)) + 
+  coord_cartesian(ylim = c(0, 300)) +
+  geom_vline(xintercept = c(-1, 1), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  geom_hline(yintercept = -log10(0.05), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.title.y = element_text(face = "bold", margin = margin(0, 20, 0, 0), size = rel(1.1), color = 'black'),
+    axis.title.x = element_text(face = "bold", margin = margin(20, 0, 0, 0), size = rel(1.1), color = 'black',),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5, color = "black"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_blank() 
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 5)))  # bigger legend dots
+
+#Print the plot
+print(cac3_volcano_plot)
+
+#Save Plot
+ggsave("./cac3_volcano_plot_FINAL.pdf", plot=cac3_volcano_plot, width = 12, height = 9, unit="in",  dpi=400)
+
+##set-7
+#Assign categories with NS prioritized
+set7_vol$category <- case_when(
+  set7_vol$log2FoldChange > -1 & set7_vol$log2FoldChange < 1 ~ "NS",
+  set7_vol$NCU %in% Prc2targets$V11 ~ "PRC2",
+  set7_vol$log2FoldChange > 1 & set7_vol$padj < 0.05 ~ "Upregulated",
+  set7_vol$log2FoldChange < -1 & set7_vol$padj < 0.05 ~ "Downregulated",
+  TRUE ~ "NS"
+)
+
+#Reorder so PRC2 is plotted last (on top)
+set7_vol <- set7_vol[order(set7_vol$category == "PRC2"), ]
+
+#Plot
+set7_volcano_plot <- ggplot(set7_vol, aes(
+  x = log2FoldChange,
+  y = -log10(padj),
+  color = category
+)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "red",
+      "Downregulated" = "blue",
+      "PRC2" = "orange2",
+      "NS" = "grey"
+    ),
+    breaks = c("Upregulated", "Downregulated", "PRC2"), # only show these in legend
+    labels = c("Upregulated", "Downregulated", "PRC2")
+  ) +
+  labs(
+    x = expression(paste("log"[2], "FoldChange(set-7/WT)")),
+    y = expression(paste("-log"[10], "(p-value)")),
+    title = "set-7 vs WT"
+  ) + 
+  scale_x_continuous(breaks = breaks_width(3), minor_breaks = breaks_width(1)) + 
+  scale_y_continuous(trans = pseudo_log_trans(base = 10, sigma = 2),
+                     breaks = c(0,2,5,10,20,50,100,200),
+                     limits = c(0, NA)) + 
+  coord_cartesian(ylim = c(0, 200)) +
+  geom_vline(xintercept = c(-1, 1), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  geom_hline(yintercept = -log10(0.05), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.title.y = element_text(face = "bold", margin = margin(0, 20, 0, 0), size = rel(1.1), color = 'black'),
+    axis.title.x = element_text(face = "bold", margin = margin(20, 0, 0, 0), size = rel(1.1), color = 'black',),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5, color = "black"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_blank() 
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 5)))  # bigger legend dots
+
+#Print the plot
+print(set7_volcano_plot)
+
+#Save Plot
+ggsave("./set7_volcano_plot_FINAL.pdf", plot=set7_volcano_plot, width = 12, height = 9, unit="in",  dpi=400)
+
+##cac-1_suz-12
+#Assign categories with NS prioritized
+cac1_suz12_vol$category <- case_when(
+  cac1_suz12_vol$log2FoldChange > -1 & cac1_suz12_vol$log2FoldChange < 1 ~ "NS",
+  cac1_suz12_vol$NCU %in% Prc2targets$V11 ~ "PRC2",
+  cac1_suz12_vol$log2FoldChange > 1 & cac1_suz12_vol$padj < 0.05 ~ "Upregulated",
+  cac1_suz12_vol$log2FoldChange < -1 & cac1_suz12_vol$padj < 0.05 ~ "Downregulated",
+  TRUE ~ "NS"
+)
+
+#Reorder so PRC2 is plotted last (on top)
+cac1_suz12_vol <- cac1_suz12_vol[order(cac1_suz12_vol$category == "PRC2"), ]
+
+#Plot
+library(ggplot2)
+library(scales)  # breaks_width(), pseudo_log_trans()
+
+cac1_suz12_volcano_plot <- ggplot(cac1_suz12_vol, aes(
+  x = log2FoldChange,
+  y = -log10(padj),
+  color = category
+)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "red",
+      "Downregulated" = "blue",
+      "PRC2" = "orange2",
+      "NS" = "grey"
+    ),
+    breaks = c("Upregulated", "Downregulated", "PRC2"), # only show these in legend
+    labels = c("Upregulated", "Downregulated", "PRC2")
+  ) +
+  labs(
+    x = expression(paste("log"[2], "FoldChange(cac-1_suz-12/WT)")),
+    y = expression(paste("-log"[10], "(p-value)")),
+    title = "cac-1_suz-12 vs WT"
+  ) + 
+  scale_x_continuous(breaks = breaks_width(3), minor_breaks = breaks_width(1)) + 
+  scale_y_continuous(trans = pseudo_log_trans(base = 10, sigma = 2),
+                     breaks = c(0,2,5,10,20,50,100,200,300),
+                     limits = c(0, NA)) + 
+  coord_cartesian(ylim = c(0, 300)) +
+  geom_vline(xintercept = c(-1, 1), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  geom_hline(yintercept = -log10(0.05), color = "grey5", linetype = "dashed", alpha = 0.35) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.title.y = element_text(face = "bold", margin = margin(0, 20, 0, 0), size = rel(1.1), color = 'black'),
+    axis.title.x = element_text(face = "bold", margin = margin(20, 0, 0, 0), size = rel(1.1), color = 'black',),
+    axis.text = element_text(color = "black"),
+    plot.title = element_text(hjust = 0.5, color = "black"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_blank() 
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 5)))  # bigger legend dots
+
+#Print the plot
+print(cac1_suz12_volcano_plot)
+
+ggsave("./cac1_suz12_volcano_plot_FINAL.pdf", plot=cac1_suz12_volcano_plot, width = 12, height = 9, unit="in",  dpi=400)
+
+```
+
+# Now, I want to make Venn-diagrams to compare the number of genes that are DE across all the CAF-1 mutants & set-7 for K27 genes
+```{r Make Venn Diagrams, echo=FALSE}
+#read in all Upregulated genes
+cac1UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__UP_genes.csv")
+cac2UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__UP_genes.csv")
+cac3UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__UP_genes.csv")
+set7UP <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__UP_genes.csv")
+
+cac1DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__DOWN_genes.csv")
+cac2DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__DOWN_genes.csv")
+cac3DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__DOWN_genes.csv")
+set7DOWN <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__DOWN_genes.csv")
+
+cac1_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
+cac2_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__K27_UP_genes.csv")
+cac3_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__K27_UP_genes.csv")
+set7_K27 <- read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
+
+#Venn Diagram w/ All Upregulated genes in CAF-1 mutants
+venn.diagram(
+  x = list(cac1UP$Attributes, cac2UP$Attributes, cac3UP$Attributes),
+  category.names = c("cac1", "cac2 ", "cac3"),
+  filename = 'CAF-1_UP_venn_diagramm.png',
+  col=c("#8da0cb", "#66c2a5", "#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#66c2a5",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+#Make euler plot inputing values gathered from venn.diagram(). This will provide a proportional venn-diagram
+CAF1_up_fit = euler(c("A" = 100, "B" = 218, "C" = 472, "A&B" = 254, "A&C" = 74, "B&C" =110, "A&B&C" = 695))
+CAF1_up_eulerplot <- plot(CAF1_up_fit)
+
+#Save file
+ggsave(filename = "CAF-1_All_UP_euler.pdf", plot = CAF1_up_eulerplot, width = 4, height = 4, dpi = 600)
+
+#Venn Diagram w/ All Downregulated genes in CAF-1 mutants
+venn.diagram(
+  x = list(cac1DOWN$Attributes, cac2DOWN$Attributes, cac3DOWN$Attributes),
+  category.names = c("cac1", "cac2 ", "cac3"),
+  filename = 'CAF-1_DOWN_venn_diagramm.png',
+  col=c("#8da0cb", "#66c2a5", "#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#66c2a5",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+#Make euler plot inputing values gathered from venn.diagram(). This will provide a proportional venn-diagram
+CAF1_down_fit = euler(c("A" = 91, "B" = 87, "C" = 448, "A&B" = 67, "A&C" = 57, "B&C" = 100, "A&B&C" = 200))
+CAF1_down_eulerplot <- plot(CAF1_down_fit)
+
+#Save file
+ggsave(filename = "CAF-1_All_DOWN_euler.pdf", plot = CAF1_down_eulerplot, width = 4, height = 4, dpi = 600)
+
+#Making Venn for All Upregulated K27 genes in CAF-1 mutants
+venn.diagram(
+  x = list(cac1_K27$Attributes, cac2_K27$Attributes, cac3_K27$Attributes),
+  category.names = c("cac1", "cac2 ", "cac3"),
+  filename = 'CAF-1_venn_diagramm_UP_K27_genes.png',
+  col=c("#8da0cb", "#66c2a5", "#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#66c2a5",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+#plotting euler
+CAF1_K27_up_fit = euler(c("A" = 7, "B" = 22, "C" = 77, "A&B" = 20, "A&C" = 20, "B&C" = 21, "A&B&C" = 202))
+CAF1_K27_up_eulerplot <- plot(CAF1_K27_up_fit)
+
+#Save file
+ggsave(filename = "CAF-1_euler_K27_UP.pdf", plot = CAF1_K27_up_eulerplot, width = 4, height = 4, dpi = 600)
+
+#Making Venn for All Upregulated genes in cac-1/2 and set-7 mutants
+venn.diagram(
+  x = list(cac1_K27$Attributes, cac2_K27$Attributes, set7_K27$Attributes),
+  category.names = c("cac1", "cac2 ", "set7"),
+  filename = 'cac1-2_set7_venn_diagramm_UP_K27_genes.png',
+  col=c("#8da0cb", "#66c2a5", "#756bb1"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#66c2a5",0.25), alpha("#756bb1",0.25)),
+  output=TRUE)
+
+#plotting euler
+cac1_2_set7_fit = euler(c("A" = 13, "B" = 12, "C" = 104, "A&B" = 56, "A&C" = 14, "B&C" = 31, "A&B&C" = 166))
+cac1_2_set7_eulerplot <- plot(cac1_2_set7_fit)
+
+#Save file
+ggsave(filename = "cac1-2_set7_euler_All_UP.pdf", plot = cac1_2_set7_eulerplot, width = 4, height = 4, dpi = 600)
+```
+
+#Now, comparing genes that are upregulated in cac-1/2 and lose h3k27me3 and/or h3k36me3
+```{r, venn test}
+#combining RNA
+library(dplyr)
+
+# Stack then keep the first occurrence of each Attributes
+cac1_suz12_K27UPcombine <- bind_rows(
+  mutate(cac1_RNA_K27, .source = "cac1_RNA_K27"),
+  mutate(suz12_RNA_K27, .source = "suz12_RNA_K27")
+) %>%
+  # if you want cac1UP to win on collisions, keep this order
+  distinct(Attributes, .keep_all = TRUE) %>%
+  select(-.source)
+
+#only prc2 targets
+cacupcombinek27 = subset(cacUPcombine, cacUPcombine$Attributes %in% Prc2targets$V10)
+
+#Venn Diagram w/ All Upregulated genes in CAF-1 mutants
+venn.diagram(
+  x = list(cacupcombinek27$Attributes, K27lost$gene_id, K36lost$gene_id),
+  category.names = c("Upregulated", "K27 lost ", "K36 lost"),
+  filename = 'CAF-1_UP_K27K36loss_diagram.png',
+  col=c("#8da0cb", "#66c2a5", "#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#66c2a5",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+#Make euler plot inputing values gathered from venn.diagram(). This will provide a proportional venn-diagram
+CAF1_up_K27K36_fit = euler(c("A" = 126, "B" = 39, "C" = 10, "A&B" = 98, "A&C" = 19, "B&C" = 14, "A&B&C" = 49))
+CAF1_up_K27K36_eulerplot <- plot(CAF1_up_K27K36_fit)
+
+set7_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
+suz12_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__K27_UP_genes.csv")
+ash1_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__K27_UP_genes.csv")
+cac1_RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
+cac1_cac2RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__K27_UP_genes.csv")
+cac1_suz12RNA_K27 = read.csv("../CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__K27_UP_genes.csv")
+
+##################################
+#FIGURE 2
+#Patterns of genes that lose H3K27me3 in CAF-1 mutants
+venn.diagram(
+  x = list(K27lost_code$gene_id, cacupcombinek27$Attributes),
+  category.names = c("K27_lost", "K27lost_CAF_UP"),
+  filename = "K27lost_CAF-1_UP.png",
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+
+CAF1_K27_lost_UP_fit = euler(c("A" = 43, "B" = 145, "A&B" = 147))
+CAF1_K27_lost_UP_eulerplot <- plot(CAF1_K27_lost_UP_fit)
+ggsave(filename = "CAF1_K27_lost_UP.pdf", plot = CAF1_K27_lost_UP_eulerplot, width = 4, height = 4, dpi = 600)
+
+K27lost_cac1cac2UP = subset(K27lost_code, K27lost_code$gene_id %in% cacupcombinek27$Attributes)
+K27lost_set7UP = subset(K27lost_code, K27lost_code$gene_id %in% set7_RNA_K27$Attributes)
+
+venn.diagram(
+  x = list(K27lost_set7UP$gene_id, K27lost_cac1cac2UP$gene_id),
+  category.names = c("K27lost_set7_UP", "K27lost_CAF_UP"),
+  filename = "K27lost_set7UP_CAF1UP.png",
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_K27_lost_set7_UP_fit = euler(c("A" = 13, "B" = 48, "A&B" = 99))
+CAF1_K27_lost_set7_UP_eulerplot <- plot(CAF1_K27_lost_set7_UP_fit)
+ggsave(filename = "CAF1_K27_lost_set7_UP.pdf", plot = CAF1_K27_lost_set7_UP_eulerplot, width = 4, height = 4, dpi = 600)
+##################################
+
+
+###################################################
+#FIGURE 3
+#K27 lost ash1 K27/K36 lost caf1
+venn.diagram(
+  x = list(K27lostash1$gene_id, K27lost$gene_id),
+  category.names = c("ash1 K27 lost", "CAF K27 lost"),
+  filename = "ASH1_CAF1_K27K36lost.png",
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_ASH1_K27lost_fit = euler(c("A" = 310, "B" = 48, "A&B" = 152))
+CAF1_ASH1_K27lost_eulerplot <- plot(CAF1_ASH1_K27lost_fit)
+ggsave(filename = "CAF1_ASH1_K27lost.pdf", plot = CAF1_ASH1_K27lost_eulerplot <- plot(CAF1_ASH1_K27lost_fit), width = 4, height = 4, dpi = 600)
+
+#K27 genes upregulated ash1 caf1
+venn.diagram(
+  x = list(ash1_RNA_K27$Attributes, cacupcombinek27$Attributes),
+  category.names = c("ash1 UP", "CAF UP"),
+  filename = 'ASH1_CAF1_K27_UP_genes.png',
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_ASH1_K27_UP_fit = euler(c("A" = 148, "B" = 36, "A&B" = 256))
+CAF1_ASH1_K27_UP_eulerplot <- plot(CAF1_ASH1_K27_UP_fit)
+ggsave(filename = "CAF-1_UP_ASH1_UP.pdf", plot = CAF1_ASH1_K27_UP_eulerplot <- plot(CAF1_ASH1_K27_UP_fit), width = 4, height = 4, dpi = 600)
+
+#K27 genes upregulated ash1 set7
+venn.diagram(
+  x = list(ash1_RNA_K27$Attributes, set7_RNA_K27$Attributes),
+  category.names = c("ash1 UP", "set7 UP"),
+  filename = 'ASH1_set7_K27_UP_genes.png',
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+SET7_ASH1_K27_UP_fit = euler(c("A" = 172, "B" = 83, "A&B" = 232))
+SET7_ASH1_K27_UP_eulerplot <- plot(SET7_ASH1_K27_UP_fit)
+ggsave(filename = "SET7_UP_ASH1_UP.pdf", plot = SET7_ASH1_K27_UP_eulerplot <- plot(SET7_ASH1_K27_UP_fit), width = 4, height = 4, dpi = 600)
+
+#K27 genes upregulated CAF1 K36 K27 lost
+venn.diagram(
+  x = list(K36lost_code$gene_id, K27lost_code$gene_id, cacupcombinek27$Attributes),
+  category.names = c("K36lost", "K27 lost", "CAF UP"),
+  filename = 'K36lost_K27lost_CAF_UP_genes.png',
+  col=c("#8da0cb","#756bb1","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#756bb1",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+K36lost_K27lost_CAF_UP_fit = euler(c("A" = 37, "B" = 7, "C" = 127, "A&B" = 6, "A&C" = 102, "B&C" = 18, "A&B&C" = 45))
+K36lost_K27lost_CAF_UP_eulerplot <- plot(K36lost_K27lost_CAF_UP_fit)
+ggsave(filename = "K36lost_K27lost_CAF_UP.pdf", plot = K36lost_K27lost_CAF_UP_eulerplot, width = 4, height = 4, dpi = 600)
+
+#K36 lost genes CAF-1 & set-7
+venn.diagram(
+  x = list(K36lost$gene_id, K36lost_set7$gene_id),
+  category.names = c("CAF-1 K36 lost", "set-7 K36 lost"),
+  filename = "CAF1_SET7_K36lost.png",
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_SET7_K36lost_fit = euler(c("A" = 79, "B" = 28, "A&B" = 13))
+CAF1_SET7_K36lost_eulerplot <- plot(CAF1_SET7_K36lost_fit)
+ggsave(filename = "CAF1_SET7_K36lost.pdf", plot = CAF1_SET7_K36lost_eulerplot, width = 4, height = 4, dpi = 600)
+####################################################
+
+#####################################################
+#FIGURE 4
+###main
+venn.diagram(
+  x = list(Kac_K4_CAF_Gain_code$gene_id, cacupcombinek27$Attributes, K27lost_code$gene_id),
+  category.names = c("CAF gained", "CAF UP", "K27lost"),
+  filename = 'CAF1_Kac_K4_gained_Upreg_genes.png',
+  col=c("#8da0cb","#756bb1","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#756bb1",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+Kac_K4_gain_K27lost_CAF_Up_fit = euler(c("A" = 13, "B" = 29, "C" = 131, "A&B" = 14, "A&C" = 14, "B&C" = 71, "A&B&C" = 76))
+Kac_K4_gain_K27lost_CAF_Up_eulerplot <- plot(Kac_K4_gain_K27lost_CAF_Up_fit)
+ggsave(filename = "Kac_K4_gain_K27lost_CAF_Up.pdf", plot = Kac_K4_gain_K27lost_CAF_Up_eulerplot, width = 4, height = 4, dpi = 600)
+
+venn.diagram(
+  x = list(Kac_Gain_CAF$gene_id, Kac_Gain_set7$gene_id),
+  category.names = c("CAF gained", "SET7 gained"),
+  filename = 'CAF1_set7_Kac_gained_genes.png',
+  col=c("#8da0cb","#756bb1"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#756bb1",0.25)),
+  output=TRUE)
+
+CAF1_SET7_K27lost_Kac_Gain_fit = euler(c("A" = 92, "B" = 37, "A&B" = 12))
+CAF1_SET7_K27lost_Kac_Gain_eulerplot <- plot(CAF1_SET7_K27lost_Kac_Gain_fit)
+ggsave(filename = "CAF1_SET7_Kac_Gain.pdf", plot = CAF1_SET7_K27lost_Kac_Gain_eulerplot, width = 4, height = 4, dpi = 600)
+
+
+venn.diagram(
+  x = list(K4_Gain_CAF$gene_id, K4_Gain_set7$gene_id),
+  category.names = c("CAF gained", "SET7 gained"),
+  filename = 'CAF1_set7_K4me2_gained_genes.png',
+  col=c("#8da0cb","#756bb1"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#756bb1",0.25)),
+  output=TRUE)
+
+CAF1_SET7_K27lost_K4_Gain_fit = euler(c("A" = 2, "B" = 26, "A&B" = 22))
+CAF1_SET7_K27lost_K4_Gain_eulerplot <- plot(CAF1_SET7_K27lost_K4_Gain_fit)
+ggsave(filename = "CAF1_SET7_K4_Gain.pdf", plot = CAF1_SET7_K27lost_K4_Gain_eulerplot, width = 4, height = 4, dpi = 600)
+
+###supplement
+venn.diagram(
+  x = list(Kac_Gain_CAF$gene_id, K36lost$gene_id, K27lost$gene_id),
+  category.names = c("CAF Kac gained", "CAF K36 lost", "CAF K27 lost"),
+  filename = 'CAF1_Kac_gained_K27me3_K36me3_lost_genes.png',
+  col=c("#8da0cb","#756bb1","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#756bb1",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_Kac_Gain_K36_K27_lost_fit = euler(c("A" = 13, "B" = 21, "C" = 94, "A&B" = 5, "A&C" = 49, "B&C" = 20, "A&B&C" = 37))
+CAF1_Kac_Gain_K36_K27_lost_eulerplot <- plot(CAF1_Kac_Gain_K36_K27_lost_fit)
+ggsave(filename = "CAF1_Kac_Gain_K36_K27_lost.pdf", plot = CAF1_Kac_Gain_K36_K27_lost_eulerplot, width = 4, height = 4, dpi = 600)
+
+
+#venn.diagram(
+#  x = list(K4_Gain_CAF$gene_id, K27lost$gene_id),
+#  category.names = c("CAF K4 gained", "CAF K27 lost"),
+#  filename = 'CAF1_K4gain_K27lost_genes.png',
+#  col=c("#8da0cb","#756bb1"),
+#  fill = c(alpha("#8da0cb",0.25), alpha("#756bb1",0.25)),
+#  output=TRUE)
+
+
+venn.diagram(
+  x = list(Kac_K4_cac1_Gain$gene_id, Kac_K4_cac2_Gain$gene_id),
+  category.names = c("cac-1 gained", "cac-2 gained"),
+  filename = 'cac1_cac2_Kac_K4_gained_genes.png',
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+cac1_cac2_Kac_K4_gained_fit = euler(c("A" = 61, "B" = 2, "A&B" = 60))
+cac1_cac2_Kac_K4_gained_eulerplot <- plot(cac1_cac2_Kac_K4_gained_fit)
+ggsave(filename = "cac1_cac2_Kac_K4_gained.pdf", plot = cac1_cac2_Kac_K4_gained_eulerplot, width = 4, height = 4, dpi = 600)
+
+####################################################
+
+
+#######################################################
+#FIGURE 5
+###Double Mutants
+venn.diagram(
+  x = list(cac1_cac2RNA_K27$Attributes, cacupcombinek27$Attributes),
+  category.names = c("dub UP", "CAF UP"),
+  filename = 'CAF1_cac1_2_K27_UP_genes.png',
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_Double_K27_UP_fit = euler(c("A" = 182, "B" = 8, "A&B" = 284))
+CAF1_Double_K27_UP_eulerplot <- plot(CAF1_Double_K27_UP_fit)
+ggsave(filename = "CAF-1_Double_UP.pdf", plot = CAF1_Double_K27_UP_eulerplot, width = 4, height = 4, dpi = 600)
+
+venn.diagram(
+  x = list(cac1_suz12_K27UPcombine$Attributes, cac1_suz12RNA_K27$Attributes),
+  category.names = c("singles up", "double up"),
+  filename = 'cac1suz12_singles_double_mutant_K27_UP_genes.png',
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+CAF1_suz12_Double_K27_UP_fit = euler(c("A" = 146, "B" = 5, "A&B" = 354))
+CAF1_suz12_Double_K27_UP_eulerplot <- plot(CAF1_suz12_Double_K27_UP_fit)
+ggsave(filename = "CAF-1_suz12_Double_UP.pdf", plot = CAF1_suz12_Double_K27_UP_eulerplot, width = 4, height = 4, dpi = 600)
+
+#######################################################
+#FIGURE 6
+###Double Mutants
+venn.diagram(
+  x = list(K4_genes_gain_suz12$gene_id, K4_genes_gain_cac1$gene_id, K4_cac1_suz12_gain$gene_id),
+  category.names = c("suz12 gain", "cac1 gain", "double gain"),
+  filename = 'cac1suz12_K4_gain_genes.png',
+  col=c("#8da0cb","#fc8d62","#66c2a5"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25), alpha("#66c2a5",0.25)),
+  output=TRUE)
+
+CAF1_suz12_Double_K4_fit = euler(c("A" = 0, "B" = 0, "C" = 7, "A&B" = 0, "A&C" = 5, "B&C" = 41, "A&B&C" = 9))
+CAF1_suz12_Double_K4_eulerplot <- plot(CAF1_suz12_Double_K4_fit)
+ggsave(filename = "CAF1_suz12_Double_K4.pdf", plot = CAF1_suz12_Double_K4_eulerplot, width = 4, height = 4, dpi = 600)
+
+venn.diagram(
+  x = list(Kac_Gain_suz12$gene_id, Kac_Gain_cac1$gene_id, Kac_cac1_suz12_gain$gene_id),
+  category.names = c("suz12 gain", "cac1 gain", "double gain"),
+  filename = 'cac1suz12_Kac_gain_genes.png',
+  col=c("#8da0cb","#fc8d62","#66c2a5"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25), alpha("#66c2a5",0.25)),
+  output=TRUE)
+
+CAF1_suz12_Double_Kac_fit = euler(c("A" = 13, "B" = 33, "C" = 33, "A&B" = 1, "A&C" = 14, "B&C" = 14, "A&B&C" = 2))
+CAF1_suz12_Double_Kac_eulerplot <- plot(CAF1_suz12_Double_Kac_fit)
+ggsave(filename = "CAF1_suz12_Double_Kac.pdf", plot = CAF1_suz12_Double_Kac_eulerplot, width = 4, height = 4, dpi = 600)
+
+
+###Tests
+venn.diagram(
+  x = list(ash1_RNA_K27$Attributes, set7_RNA_K27$Attributes, K27lost$gene_id),
+  category.names = c("ash1_up", "set7_up", "K27 lost"),
+  filename = 'ASH1UP_SET7UP_K27lostCAF.png',
+  col=c("#8da0cb","#fc8d62","#66c2a5"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25), alpha("#66c2a5",0.25)),
+  output=TRUE)
+
+venn.diagram(
+  x = list(ash1_RNA_K27$Attributes, set7_RNA_K27$Attributes, K36lost$gene_id),
+  category.names = c("ash1_up", "set7_up", "K36 lost"),
+  filename = 'ASH1UP_SET7UP_K36lostCAF.png',
+  col=c("#8da0cb","#fc8d62","#756bb1"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25), alpha("#756bb1",0.25)),
+  output=TRUE)
+
+venn.diagram(
+  x = list(ash1_RNA_K27$Attributes, cacupcombinek27$Attributes, CAF_K27_K36_Lost$gene_id),
+  category.names = c("ash1_up", "cac_up", "K36 lost"),
+  filename = 'ASH1UP_CAC1UP_K36K27lostCAF.png',
+  col=c("#8da0cb","#fc8d62","#756bb1"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25), alpha("#756bb1",0.25)),
+  output=TRUE)
+
+#euler
+CAF1_up_ASH1_up_K27K36_fit = euler(c("A" = 116, "B" = 17, "C" = 31, "A&B" = 109, "A&C" = 32, "B&C" = 19, "A&B&C" = 147))
+CAF1_up_ASH1_up_K27K36_eulerplot <- plot(CAF1_up_ASH1_up_K27K36_fit)
+
+#Save file
+ggsave(filename = "CAF-1_Up_ASH1_Up_K27K36_loss.pdf", plot = CAF1_up_ASH1_up_K27K36_eulerplot <- plot(CAF1_up_ASH1_up_K27K36_fit), width = 4, height = 4, dpi = 600)
+
+###CAF-1 ectopic genes
+venn.diagram(
+  x = list(cac1DOWN$Attributes, CAF1_ectopic_K27_genes_CODE$gene_id),
+  category.names = c("down", "ectopic"),
+  filename = 'CAF-1_ectopic_gene_downreg.png',
+  col=c("#8da0cb","#fc8d62"),
+  fill = c(alpha("#8da0cb",0.25), alpha("#fc8d62",0.25)),
+  output=TRUE)
+
+
+```
+
+#Lastly, I want to make an IGV track for visualizing DE data with ChIP data
+```{r Make IGV Track, echo=FALSE}
+#calling list of files
+##Note: this will only work if the ONLY csv's in this directory are the ones containing the Data you want on the track (i.e. you need to move any other csv's from this directory, or move the ones you want on the track to a new one and change the path)
+list_of_files <- list.files(path = "../Research",
+                            recursive = FALSE,
+                            pattern = ".csv$")
+
+induced_genes <- readr::read_csv(list_of_files, id = "file_name")
+
+##convert to wide format
+l2fc_data <- data.frame(pivot_wider(data = induced_genes, id_cols = "NCU", names_from = "file_name", values_from = "log2FoldChange"))
+
+#assigning row names and deleting extra column
+rownames(l2fc_data) <- l2fc_data[,1]
+l2fc_data <- l2fc_data[,-1]
+
+#assigning NA values to 0
+l2fc_data[is.na(l2fc_data)] <- 0
+
+#tibble NCU names back to first column
+l2fc <- tibble::rownames_to_column(l2fc_data, "VALUE")
+
+#read in file w/ all genes
+ngenes = read.csv("../csv_files/neurospora_genes_edit.csv")
+
+#Make IGV Track
+##Note: only genes with DE in one or more strains will display data in the track
+combine <- transform(merge(ngenes, l2fc, by = "VALUE"))
+track = combine %>% select("SequenceID", "FeatureStart", "FeatureEnd", "VALUE", "asf1__alpha0.05__DE_absLFC_ge_1p0.csv", "atrx__alpha0.05__DE_absLFC_ge_1p0.csv", "cac1__alpha0.05__DE_absLFC_ge_1p0.csv", "cac2__alpha0.05__DE_absLFC_ge_1p0.csv", "cac3__alpha0.05__DE_absLFC_ge_1p0.csv", "naf1__alpha0.05__DE_absLFC_ge_1p0.csv", "naf2__alpha0.05__DE_absLFC_ge_1p0.csv", "set7__alpha0.05__DE_absLFC_ge_1p0.csv", "suz12__alpha0.05__DE_absLFC_ge_1p0.csv", "ash1__alpha0.05__DE_absLFC_ge_1p0.csv", "cac1_cac2__alpha0.05__DE_absLFC_ge_1p0.csv", "cac1_suz12__alpha0.05__DE_absLFC_ge_1p0.csv")
+
+#write track to file
+write.table(track, file="RNAseq_CAF-1_Paper_Final.igv", sep="\t", row.names = FALSE, quote = FALSE)
+```
+
+#END
