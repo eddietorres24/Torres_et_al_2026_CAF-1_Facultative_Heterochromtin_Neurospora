@@ -15,11 +15,11 @@ get_script_dir <- function() {
 setwd(get_script_dir()); cat("Working directory set to:", getwd(), "\n")
 
 ## ================== user settings (edit) ==================
-counts_file      <- "readcounts_All_CAF1paper.merged.txt"   # featureCounts output
-coldata_file     <- "coldata.csv"                            # must have columns: sample_id, condition
-names_file       <- "names.txt"                              # mapping columns -> desired names
-gene_map_file    <- "gene_annotation.csv"                    # optional: gene_id,gene_symbol
-k27_bed_file     <- "H3K27me3_methylated_genes_FINAL.bed"    # optional: IDs in col 10 (not required)
+counts_file      <- "bed_csv_txt_files/readcounts_All_CAF1paper.merged.txt"    # featureCounts output
+coldata_file     <- "bed_csv_txt_files/coldata.csv"                            # must have columns: sample_id, condition
+names_file       <- "bed_csv_txt_files/names.txt"                              # mapping columns -> desired names
+gene_map_file    <- "bed_csv_txt_files/gene_annotation.csv"                    # optional: gene_id,gene_symbol
+k27_bed_file     <- "bed_csv_txt_files/H3K27me3_methylated_genes_FINAL.bed"    # optional: IDs in col 10 (not required)
 outdir           <- "RNAseq_QC_out"
 reference_level  <- "WT"                                     # reference in 'condition'
 min_count_filter <- 10                                       # keep genes with rowSums >= this
