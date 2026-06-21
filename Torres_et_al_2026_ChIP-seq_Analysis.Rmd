@@ -23,8 +23,8 @@ library(dplyr)
 
 ```{r, read in metadata & regions of interest}
 #reading in metdata
-meta <- read.csv("bed_csv_txt_files/csaw_samples_files/cac_csaw_FINAL.csv")
-#metaQC <- read.csv("bed_csv_txt_files/csaw_samples_files/cac_csaw_QC_TEST.csv")
+meta <- read.csv("bed_csv_txt_files/cac_csaw_FINAL.csv")
+#metaQC <- read.csv("bed_csv_txt_files/cac_csaw_QC_TEST.csv")
 
 #fix path (if necessary, should only need to do if you're in wrong directory)
 #meta <- meta %>%
