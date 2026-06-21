@@ -1826,11 +1826,11 @@ p
 ```{r, Volcano Plots}
 #Make New variables for plot
 ##read csvs with log2FC data
-cac1_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__ALL_results_LFC.csv")
-cac2_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__ALL_results_LFC.csv")
-cac3_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__ALL_results_LFC.csv")
-set7_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__ALL_results_LFC.csv")
-cac1_suz12_vol <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_SUZ12__alpha0.05__ALL_results_LFC.csv")
+cac1_vol <- read.csv("bed_csv_txt_files/cac1__alpha0.05__ALL_results_LFC.csv")
+cac2_vol <- read.csv("bed_csv_txt_files/cac2__alpha0.05__ALL_results_LFC.csv")
+cac3_vol <- read.csv("bed_csv_txt_files/cac3__alpha0.05__ALL_results_LFC.csv")
+set7_vol <- read.csv("bed_csv_txt_files/set7__alpha0.05__ALL_results_LFC.csv")
+cac1_suz12_vol <- read.csv("bed_csv_txt_files/cac1_SUZ12__alpha0.05__ALL_results_LFC.csv")
 
 #I need to get rid of a few genes with a p-value of 0, as well as the knocked-out gene itself
 cac1_vol <- cac1_vol[cac1_vol$padj != 0, ]
@@ -2153,20 +2153,20 @@ ggsave("./cac1_suz12_volcano_plot_FINAL.pdf", plot=cac1_suz12_volcano_plot, widt
 # Now, I want to make Venn-diagrams to compare the number of genes that are DE across all the CAF-1 mutants & set-7 for K27 genes
 ```{r Make Venn Diagrams, echo=FALSE}
 #read in all Upregulated genes
-cac1UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__UP_genes.csv")
-cac2UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__UP_genes.csv")
-cac3UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__UP_genes.csv")
-set7UP <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__UP_genes.csv")
+cac1UP <- read.csv("bed_csv_txt_files/cac1__alpha0.05__UP_genes.csv")
+cac2UP <- read.csv("bed_csv_txt_files/cac2__alpha0.05__UP_genes.csv")
+cac3UP <- read.csv("bed_csv_txt_files/cac3__alpha0.05__UP_genes.csv")
+set7UP <- read.csv("bed_csv_txt_files/set7__alpha0.05__UP_genes.csv")
 
-cac1DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__DOWN_genes.csv")
-cac2DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__DOWN_genes.csv")
-cac3DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__DOWN_genes.csv")
-set7DOWN <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__DOWN_genes.csv")
+cac1DOWN <- read.csv("bed_csv_txt_files/cac1__alpha0.05__DOWN_genes.csv")
+cac2DOWN <- read.csv("bed_csv_txt_files/cac2__alpha0.05__DOWN_genes.csv")
+cac3DOWN <- read.csv("bed_csv_txt_files/cac3__alpha0.05__DOWN_genes.csv")
+set7DOWN <- read.csv("bed_csv_txt_files/set7__alpha0.05__DOWN_genes.csv")
 
-cac1_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
-cac2_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac2__alpha0.05__K27_UP_genes.csv")
-cac3_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac3__alpha0.05__K27_UP_genes.csv")
-set7_K27 <- read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
+cac1_K27 <- read.csv("bed_csv_txt_files/cac1__alpha0.05__K27_UP_genes.csv")
+cac2_K27 <- read.csv("bed_csv_txt_files/cac2__alpha0.05__K27_UP_genes.csv")
+cac3_K27 <- read.csv("bed_csv_txt_files/cac3__alpha0.05__K27_UP_genes.csv")
+set7_K27 <- read.csv("bed_csv_txt_files/set7__alpha0.05__K27_UP_genes.csv")
 
 #Venn Diagram w/ All Upregulated genes in CAF-1 mutants
 venn.diagram(
@@ -2263,12 +2263,12 @@ venn.diagram(
 CAF1_up_K27K36_fit = euler(c("A" = 126, "B" = 39, "C" = 10, "A&B" = 98, "A&C" = 19, "B&C" = 14, "A&B&C" = 49))
 CAF1_up_K27K36_eulerplot <- plot(CAF1_up_K27K36_fit)
 
-set7_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/set7__alpha0.05__K27_UP_genes.csv")
-suz12_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/suz12__alpha0.05__K27_UP_genes.csv")
-ash1_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/ash1__alpha0.05__K27_UP_genes.csv")
-cac1_RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1__alpha0.05__K27_UP_genes.csv")
-cac1_cac2RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_cac2__alpha0.05__K27_UP_genes.csv")
-cac1_suz12RNA_K27 = read.csv("bed_csv_txt_files/CAF-1_RNA-seq_Analysis/csv_files/cac1_suz12__alpha0.05__K27_UP_genes.csv")
+set7_RNA_K27 = read.csv("bed_csv_txt_files/set7__alpha0.05__K27_UP_genes.csv")
+suz12_RNA_K27 = read.csv("bed_csv_txt_files/suz12__alpha0.05__K27_UP_genes.csv")
+ash1_RNA_K27 = read.csv("bed_csv_txt_files/ash1__alpha0.05__K27_UP_genes.csv")
+cac1_RNA_K27 = read.csv("bed_csv_txt_files/cac1__alpha0.05__K27_UP_genes.csv")
+cac1_cac2RNA_K27 = read.csv("bed_csv_txt_files/cac1_cac2__alpha0.05__K27_UP_genes.csv")
+cac1_suz12RNA_K27 = read.csv("bed_csv_txt_files/cac1_suz12__alpha0.05__K27_UP_genes.csv")
 
 ##################################
 #FIGURE 2
@@ -2572,7 +2572,7 @@ l2fc_data[is.na(l2fc_data)] <- 0
 l2fc <- tibble::rownames_to_column(l2fc_data, "VALUE")
 
 #read in file w/ all genes
-ngenes = read.csv("bed_csv_txt_files/csv_files/neurospora_genes_edit.csv")
+ngenes = read.csv("bed_csv_txt_files/neurospora_genes_edit.csv")
 
 #Make IGV Track
 ##Note: only genes with DE in one or more strains will display data in the track
