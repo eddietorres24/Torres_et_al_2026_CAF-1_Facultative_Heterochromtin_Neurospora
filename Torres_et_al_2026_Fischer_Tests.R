@@ -26,7 +26,7 @@ names(dfs) <- sheetnames
 ###Get Genes of Interest###
 #K27 genes is our "Background" for tests (n = 571)
 K27genes = dfs$`Dataset S2K`
-#using correct K36 data tables
+#using correct K36 data tables (REPLACE w/ DATASET 2 K36 Data to replicate)
 K36data = read.csv(file = "bed_csv_txt_files/H3K36me3_Results_allgenespromTSS_vWT.csv")
 K36datainput = read.csv(file = "bed_csv_txt_files/H3K36me3_Results_allgenespromTSS_vinput.csv")
 #K27 data from Dataset 2
